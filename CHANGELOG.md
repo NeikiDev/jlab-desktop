@@ -25,9 +25,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Repository audited for secrets in source and history. None found.
 
+## [0.1.1] - 2026-05-02
+
+### Changed
+
+- Bumped `sha2` to `0.11`, `@tauri-apps/plugin-dialog` and `tauri-plugin-dialog` to `2.7.1`, `swatinem/rust-cache` to `2.9.1`, and `tauri-apps/tauri-action` to `0.6.2`. No user-facing changes.
+
 ## [0.1.0] - 2026-05-02
 
 The first public release. Initial macOS (universal) and Windows (MSI) builds.
 
-[Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.1.1
 [0.1.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.1.0

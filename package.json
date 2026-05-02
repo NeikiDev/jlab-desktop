@@ -1,6 +1,6 @@
 {
   "name": "jlab-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cross-platform desktop client for the JLab static JAR scanner API",
   "license": "(MIT OR Apache-2.0)",
   "private": false,
@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
-    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
