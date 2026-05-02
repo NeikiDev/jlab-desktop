@@ -101,7 +101,7 @@ jobs:
         run: npm ci
 
       - name: Build and upload (macOS)
-        uses: tauri-apps/tauri-action@ecd2eff64572601ddde25cc4962c2704435736e9 # v0.5.16
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -146,7 +146,7 @@ jobs:
         run: npm ci
 
       - name: Build and upload (Windows)
-        uses: tauri-apps/tauri-action@ecd2eff64572601ddde25cc4962c2704435736e9 # v0.5.16
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
