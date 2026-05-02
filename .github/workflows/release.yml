@@ -186,3 +186,34 @@ jobs:
           releaseBody: ${{ needs.version.outputs.release_body }}
           releaseDraft: false
           prerelease: false
+
+  notify:
+    name: Notify Telegram
+    needs: [version, build-macos, build-windows]
+    if: always() && needs.version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Telegram message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MACOS_RESULT: ${{ needs.build-macos.result }}
+          WINDOWS_RESULT: ${{ needs.build-windows.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "Telegram secrets not configured. Skipping."
+            exit 0
+          fi
+          if [ "$MACOS_RESULT" = "success" ] && [ "$WINDOWS_RESULT" = "success" ]; then
+            msg="release build success"
+          else
+            msg="release build failure"
+          fi
+          curl -sS --fail-with-body \
+            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${msg}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            > /dev/null
