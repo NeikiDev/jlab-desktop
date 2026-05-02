@@ -25,6 +25,7 @@ jobs:
       version: ${{ steps.read.outputs.version }}
       tag: ${{ steps.read.outputs.tag }}
       should_release: ${{ steps.gate.outputs.should_release }}
+      release_body: ${{ steps.changelog.outputs.body }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -69,6 +70,35 @@ jobs:
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Extract changelog section
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.read.outputs.version }}"
+          body=$(awk -v v="$version" '
+            /^## \[/ {
+              if (in_block) { exit }
+              if ($0 ~ "^## \\[" v "\\]") { in_block = 1; next }
+              next
+            }
+            in_block { print }
+          ' CHANGELOG.md | sed -e ':a' -e '/./,$!d;/^$/N;/\n$/ba')
+          if [ -z "$body" ]; then
+            body="Release v$version. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details."
+          fi
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo "## JLab Desktop v$version"
+            echo
+            echo "$body"
+            echo
+            echo "---"
+            echo
+            echo "Full history: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
   build-macos:
     name: Build macOS (universal)
     needs: version
@@ -109,8 +139,7 @@ jobs:
         with:
           tagName: ${{ needs.version.outputs.tag }}
           releaseName: "JLab Desktop ${{ needs.version.outputs.tag }}"
-          releaseBody: |
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full notes.
+          releaseBody: ${{ needs.version.outputs.release_body }}
           releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
@@ -154,7 +183,6 @@ jobs:
         with:
           tagName: ${{ needs.version.outputs.tag }}
           releaseName: "JLab Desktop ${{ needs.version.outputs.tag }}"
-          releaseBody: |
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full notes.
+          releaseBody: ${{ needs.version.outputs.release_body }}
           releaseDraft: false
           prerelease: false
