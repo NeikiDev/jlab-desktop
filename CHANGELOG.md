@@ -25,9 +25,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Repository audited for secrets in source and history. None found.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-05-02
 
-The first public release. Initial macOS (universal) and Windows (NSIS + MSI) builds.
+The first public release. Initial macOS (universal) and Windows (MSI) builds.
 
 [Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.1.0

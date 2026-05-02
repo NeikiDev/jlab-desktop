@@ -1,6 +1,6 @@
 [package]
 name = "jlab-desktop"
-version = "0.1.2"
+version = "0.1.0"
 description = "Cross-platform desktop client for the JLab static JAR scanner API"
 authors = ["JLab Desktop Contributors"]
 license = "MIT OR Apache-2.0"
