@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type {
+  RatterGithubInfo,
   RatterScannerIntel,
   ThreatIntel,
   ThreatRipIntel,
@@ -56,6 +57,12 @@ function classifyVerdict(verdict?: string | null): Tone {
   return "neutral";
 }
 
+function classifyRatter(rs: RatterScannerIntel): Tone {
+  if (rs.malicious) return "bad";
+  if (rs.safe || rs.automatedSafe) return "ok";
+  return "warn";
+}
+
 function classifyVirusTotal(vt: VirusTotalIntel): Tone {
   if (!vt.available) return "neutral";
   const detections = vt.detections ?? 0;
@@ -90,7 +97,7 @@ export default function ThirdPartyIntel({ intel }: Props) {
       });
     }
     if (intel.ratterScanner?.available) {
-      const tone = classifyVerdict(intel.ratterScanner.verdict);
+      const tone = classifyRatter(intel.ratterScanner);
       out.push({
         key: "rs",
         tone,
@@ -166,12 +173,14 @@ function CardShell({
   vendor,
   domain,
   reportUrl,
+  reportLabel,
   children,
 }: {
   tone: Tone;
   vendor: string;
   domain?: string;
   reportUrl?: string | null;
+  reportLabel?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -191,7 +200,7 @@ function CardShell({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {reportUrl && <ViewButton url={reportUrl} />}
+          {reportUrl && <ViewButton url={reportUrl} label={reportLabel} />}
           <span aria-hidden="true" className={cn("h-1.5 w-1.5 rounded-full", TONE_DOT[tone])} />
         </div>
       </div>
@@ -200,7 +209,7 @@ function CardShell({
   );
 }
 
-function ViewButton({ url }: { url: string }) {
+function ViewButton({ url, label = "View" }: { url: string; label?: string }) {
   return (
     <button
       type="button"
@@ -208,9 +217,9 @@ function ViewButton({ url }: { url: string }) {
         void openUrl(url);
       }}
       className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-[var(--radius-xs)] border border-border bg-bg-plate px-2 py-1 font-mono text-[10.5px] font-medium tracking-[0.02em] text-text-muted transition-[background,border-color,color] duration-fast ease-out hover:border-border-strong hover:bg-bg-hover hover:text-text active:translate-y-[1px]"
-      aria-label="Open report in browser"
+      aria-label={`${label} in browser`}
     >
-      View
+      {label}
       <svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden="true">
         <path
           d="M3 1.5h4.5V6M7.5 1.5 1.5 7.5"
@@ -313,26 +322,100 @@ function ThreatRipCard({
 }
 
 function RatterCard({ rs, tone }: { rs: RatterScannerIntel; tone: Tone }) {
-  const total = rs.totalScanners ?? 0;
-  const detections = rs.detections ?? 0;
-  const verdict = rs.verdict ?? "Unknown";
+  const headline = rs.malicious
+    ? "Malicious"
+    : rs.safe
+      ? "Whitelisted"
+      : rs.automatedSafe
+        ? "Automated Safe"
+        : "Unverified";
+  const subtitle = rs.malicious
+    ? "Known malicious sample"
+    : rs.safe
+      ? "Verified safe source"
+      : rs.automatedSafe
+        ? "Heuristic deems this safe"
+        : "No verdict from RatterScanner";
+  const repoUrl = rs.githubInfo?.repoUrl ?? null;
   return (
-    <CardShell tone={tone} vendor="RatterScanner">
-      <div className="flex items-baseline gap-2">
-        <span className={cn("text-[15px] font-semibold tracking-[-0.005em] uppercase", TONE_TEXT[tone])}>
-          {verdict}
-        </span>
-        {total > 0 && (
-          <span className="ml-auto tnum font-mono text-[11px] text-text-dim">
-            <span className={TONE_TEXT[tone]}>{detections}</span>
-            <span className="text-text-faint"> / {total}</span>
+    <CardShell
+      tone={tone}
+      vendor="RatterScanner"
+      domain="ratterscanner.com"
+      reportUrl={repoUrl}
+      reportLabel="Visit"
+    >
+      <div className="flex flex-wrap items-stretch gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <span
+            className={cn(
+              "text-[18px] font-semibold leading-tight tracking-[-0.01em]",
+              TONE_TEXT[tone],
+            )}
+          >
+            {headline}
           </span>
-        )}
-      </div>
-      <div className="text-[12px] text-text-muted">
-        {detections === 0 ? "No detections." : `${detections} detection${detections === 1 ? "" : "s"}.`}
+          <div className="flex items-center gap-1.5 text-[12px] text-text-muted">
+            <span
+              aria-hidden="true"
+              className={cn("h-1.5 w-1.5 rounded-full", TONE_DOT[tone])}
+            />
+            {subtitle}
+          </div>
+        </div>
+        {rs.githubInfo && <RatterGithubPanel info={rs.githubInfo} />}
       </div>
     </CardShell>
+  );
+}
+
+function RatterGithubPanel({ info }: { info: RatterGithubInfo }) {
+  const project = info.projectName ?? info.name ?? "GitHub Project";
+  const owner = info.owner ?? null;
+  const repoUrl = info.repoUrl ?? null;
+  return (
+    <div className="flex min-w-0 shrink-0 flex-col gap-1 rounded-[var(--radius-xs)] border border-border-faint bg-bg-inset px-2.5 py-1.5">
+      <div className="flex items-center gap-1.5 text-text-muted">
+        <GithubMark />
+        <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em] text-text-dim">
+          Verified Source
+        </span>
+      </div>
+      {repoUrl ? (
+        <button
+          type="button"
+          onClick={() => {
+            void openUrl(repoUrl);
+          }}
+          className="cursor-pointer truncate text-left text-[13px] font-medium text-sev-low hover:underline"
+          title={repoUrl}
+        >
+          {project}
+        </button>
+      ) : (
+        <span className="truncate text-[13px] font-medium text-text">{project}</span>
+      )}
+      {owner && (
+        <span className="truncate font-mono text-[10.5px] text-text-dim">by {owner}</span>
+      )}
+    </div>
+  );
+}
+
+function GithubMark() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path
+        fillRule="evenodd"
+        d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.69-.01-1.36-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+      />
+    </svg>
   );
 }
 

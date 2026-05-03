@@ -6,7 +6,7 @@
 
 ## Goal
 
-Let the user drop or pick many `.jar` files at once. The app keeps a local in-memory queue, scans them one or two at a time (respecting the 5 req/min API limit), and presents a polished report page that aggregates the results across files. Single-file scans keep working as today.
+Let the user drop or pick many `.jar` files at once. The app keeps a local in-memory queue, scans them one or two at a time (respecting the 15 req/min API limit), and presents a polished report page that aggregates the results across files. Single-file scans keep working as today.
 
 ## Tasks
 

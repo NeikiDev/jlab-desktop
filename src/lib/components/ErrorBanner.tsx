@@ -27,6 +27,7 @@ const ERROR_LABEL: Record<AppError["kind"], string> = {
   no_jar_in_archive: "no jar found",
   invalid_archive: "bad archive",
   cancelled: "cancelled",
+  history_io: "history error",
 };
 
 export default function ErrorBanner({ error, onRetry, onDismiss, canRetry }: Props) {

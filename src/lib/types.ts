@@ -33,11 +33,21 @@ export interface ThreatRipIntel {
   sha256?: string | null;
 }
 
+export interface RatterGithubInfo {
+  name: string | null;
+  owner: string | null;
+  projectName: string | null;
+  repoUrl: string | null;
+  downloadUrl: string | null;
+}
+
 export interface RatterScannerIntel {
   available: boolean;
-  verdict?: string | null;
-  detections?: number | null;
-  totalScanners?: number | null;
+  safe: boolean;
+  malicious: boolean;
+  automatedSafe: boolean;
+  hash: string | null;
+  githubInfo: RatterGithubInfo | null;
 }
 
 export interface VirusTotalIntel {
@@ -81,7 +91,27 @@ export type AppError =
   | { kind: "unsupported_file"; extension: string | null; allowed: string[] }
   | { kind: "no_jar_in_archive" }
   | { kind: "invalid_archive"; message: string; code?: string }
-  | { kind: "cancelled" };
+  | { kind: "cancelled" }
+  | { kind: "history_io"; message: string; code?: string };
+
+export interface HistorySeverityCounts {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+}
+
+export interface HistoryEntry {
+  id: string;
+  scannedAt: string;
+  fileName: string;
+  fileSizeBytes: number;
+  sha256: string;
+  severityCounts: HistorySeverityCounts;
+  topSeverity: Severity;
+  signatureCount: number;
+}
 
 export type ScanPhaseId =
   | "validate"

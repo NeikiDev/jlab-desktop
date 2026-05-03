@@ -36,6 +36,9 @@ pub enum AppError {
 
     #[error("scan cancelled by user")]
     Cancelled,
+
+    #[error("history storage error: {message}")]
+    HistoryIo { message: String },
 }
 
 impl From<std::io::Error> for AppError {

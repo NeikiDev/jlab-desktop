@@ -1,5 +1,6 @@
 mod api;
 mod error;
+mod history;
 
 use std::time::Duration;
 
@@ -12,6 +13,8 @@ pub fn run() {
         .user_agent(concat!("jlab-desktop/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
+        .gzip(true)
+        .brotli(true)
         .build()
         .expect("failed to build reqwest client");
 
@@ -41,19 +44,25 @@ pub fn run() {
         .manage(api::ScanJobs::default())
         .manage(api::HttpClient(http))
         .setup(|app| {
-            if let Ok(data_dir) = app.path().app_data_dir() {
-                if let Err(e) = std::fs::create_dir_all(&data_dir) {
-                    log::warn!(
-                        "could not create app data dir {}: {e}",
-                        api::redact_path(&data_dir.to_string_lossy())
-                    );
-                } else {
-                    log::info!(
-                        "app data dir: {}",
-                        api::redact_path(&data_dir.to_string_lossy())
-                    );
-                }
+            // History needs an on-disk home before any scan starts. If the
+            // platform-specific app_data_dir is unavailable (very rare), fall
+            // back to a temp directory so the rest of the app keeps working.
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("jlab-desktop"));
+            if let Err(e) = std::fs::create_dir_all(&data_dir) {
+                log::warn!(
+                    "could not create app data dir {}: {e}",
+                    api::redact_path(&data_dir.to_string_lossy())
+                );
+            } else {
+                log::info!(
+                    "app data dir: {}",
+                    api::redact_path(&data_dir.to_string_lossy())
+                );
             }
+            app.manage(history::HistoryStore::new(data_dir));
             if let Ok(log_dir) = app.path().app_log_dir() {
                 log::info!(
                     "app log dir: {}",
@@ -74,6 +83,9 @@ pub fn run() {
             api::open_log_dir,
             api::clear_logs,
             api::log_dir_size,
+            api::history_list,
+            api::history_clear,
+            api::history_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

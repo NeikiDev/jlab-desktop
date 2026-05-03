@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Notify;
 
 use crate::error::AppError;
+use crate::history::{self, HistoryStore};
 
 /// Replace the user's home directory prefix with `~` so log lines don't leak
 /// the system username. Operates on display strings only.
@@ -52,26 +53,92 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Read a threat-intel response body into a JSON value. Failures are logged
-/// and turned into `null` so a flaky intel lookup never breaks the scan.
-async fn fetch_threat_intel_body(resp: reqwest::Result<reqwest::Response>) -> serde_json::Value {
-    match resp {
-        Ok(r) => {
-            let status = r.status();
-            if !status.is_success() {
-                log::warn!("threat-intel non-OK status: {}", status.as_u16());
-                return serde_json::Value::Null;
-            }
-            match r.json::<serde_json::Value>().await {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("threat-intel parse failed: {e}");
-                    serde_json::Value::Null
-                }
-            }
+/// Walk the `std::error::Error::source()` chain into a single string. reqwest
+/// wraps hyper, which wraps an IO error or timeout, so the top-level Display
+/// often hides the real cause ("error decoding response body" can mean a
+/// timeout, a chunked-trailer failure, a decompression error, or a TLS
+/// close issue, depending on the inner source).
+fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = e.source();
+    let mut depth = 0;
+    while let Some(src) = cur {
+        if depth >= 5 {
+            out.push_str(" -> ...");
+            break;
         }
+        out.push_str(" -> ");
+        out.push_str(&src.to_string());
+        cur = src.source();
+        depth += 1;
+    }
+    out
+}
+
+/// Read a threat-intel response body into a JSON value. Failures are logged
+/// with enough detail (status, headers, body length, leading snippet, error
+/// source chain) to diagnose the next regression instead of throwing the
+/// body away. Always falls back to `null` so a flaky intel call never breaks
+/// the scan.
+async fn fetch_threat_intel_body(resp: reqwest::Result<reqwest::Response>) -> serde_json::Value {
+    let r = match resp {
+        Ok(r) => r,
         Err(e) => {
-            log::warn!("threat-intel request failed: {e}");
+            log::warn!(
+                "threat-intel request failed: {} timeout={} connect={}",
+                error_chain(&e),
+                e.is_timeout(),
+                e.is_connect(),
+            );
+            return serde_json::Value::Null;
+        }
+    };
+
+    let status = r.status();
+    let header_str = |name: reqwest::header::HeaderName| {
+        r.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    let content_type = header_str(reqwest::header::CONTENT_TYPE);
+    let content_encoding = header_str(reqwest::header::CONTENT_ENCODING);
+
+    if !status.is_success() {
+        log::warn!(
+            "threat-intel non-OK status: {} content-type={:?}",
+            status.as_u16(),
+            content_type,
+        );
+        return serde_json::Value::Null;
+    }
+
+    let bytes = match r.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!(
+                "threat-intel body read failed: {} timeout={} body={} content-type={:?} content-encoding={:?}",
+                error_chain(&e),
+                e.is_timeout(),
+                e.is_body(),
+                content_type,
+                content_encoding,
+            );
+            return serde_json::Value::Null;
+        }
+    };
+
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            let snippet = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]);
+            log::warn!(
+                "threat-intel parse failed: {e} bytes={} content-type={:?} content-encoding={:?} snippet={:?}",
+                bytes.len(),
+                content_type,
+                content_encoding,
+                snippet,
+            );
             serde_json::Value::Null
         }
     }
@@ -81,7 +148,7 @@ const ENDPOINT: &str = "https://jlab.threat.rip/api/public/static-scan";
 const STATUS_ENDPOINT: &str = "https://jlab.threat.rip/api/stats";
 const THREAT_INTEL_ENDPOINT: &str = "https://jlab.threat.rip/api/public/threat-intel";
 const CLIENT_HEADER: &str = "x-jlab-client";
-const CLIENT_VALUE: &str = "web";
+const CLIENT_VALUE: &str = "desktop";
 const MAX_BYTES: u64 = 50 * 1024 * 1024;
 const PHASE_EVENT: &str = "scan://phase";
 
@@ -111,7 +178,7 @@ fn has_zip_magic(bytes: &[u8]) -> bool {
 }
 
 // Containers can hold many JARs (modpacks usually do). Rather than asking
-// the user or making N round trips against a 5/min rate-limited API, we
+// the user or making N round trips against a 15/min rate-limited API, we
 // pick the largest inner .jar by uncompressed size and scan that one. The
 // largest is almost always the actual mod / payload, while the rest are
 // libraries already covered by their own signatures.
@@ -383,11 +450,18 @@ async fn run_scan(
         .send();
 
     let intel_url = format!("{THREAT_INTEL_ENDPOINT}/{sha256}");
+    // Threat-intel runs in parallel with a multi-MB upload that can take
+    // 30-60s on slow links, and it shares the client's connection pool. The
+    // 60s budget keeps it responsive on small jars while surviving the case
+    // where the server is slow because its upstream (RatterScanner /
+    // VirusTotal) is doing a cold lookup. Identity encoding sidesteps the
+    // chance of a malformed gzip / chunked trailer for this small body.
     let intel_fut = client
         .get(&intel_url)
         .header(CLIENT_HEADER, CLIENT_VALUE)
         .header(reqwest::header::ACCEPT, "application/json")
-        .timeout(Duration::from_secs(15))
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .timeout(Duration::from_secs(60))
         .send();
 
     let (response, intel_resp) = tokio::select! {
@@ -478,6 +552,17 @@ async fn run_scan(
                 serde_json::from_str(&text).map_err(|e| AppError::InvalidResponse {
                     message: format!("scan json: {e}"),
                 })?;
+
+            // Persist a small history entry on the side. We never fail the
+            // scan if disk IO is misbehaving: log and move on so the user
+            // still sees their result.
+            let store: HistoryStore = (*app.state::<HistoryStore>()).clone();
+            let entry =
+                history::build_entry(&scan_value, &upload_name, upload_size as u64, &sha256);
+            if let Err(e) = history::append(store, entry).await {
+                log::warn!("history append failed: {e}");
+            }
+
             let envelope = serde_json::json!({
                 "scan": scan_value,
                 "threatIntel": threat_intel,
@@ -618,8 +703,12 @@ pub fn log_dir_size(app: AppHandle) -> Result<u64, AppError> {
     })
 }
 
-/// Delete every file in the app log dir except the active `debug.log`.
-/// Returns the number of bytes freed so the UI can show the result.
+/// Delete rotated log files and truncate the active `debug.log` to zero.
+/// The active log can't be deleted because `tauri-plugin-log` holds it open,
+/// so we open it with `truncate(true)` to reset its size. The plugin keeps
+/// writing from its current offset, which leaves a zero-padded gap at the
+/// start of the file until the next rotation. Returns the number of bytes
+/// freed so the UI can show the result.
 #[tauri::command]
 pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
     let dir = app.path().app_log_dir().map_err(|e| AppError::Io {
@@ -631,6 +720,7 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
 
     let mut bytes_freed: u64 = 0;
     let mut removed: usize = 0;
+    let mut truncated: usize = 0;
     let entries = std::fs::read_dir(&dir).map_err(|e| AppError::Io {
         message: format!("read log dir: {e}"),
     })?;
@@ -638,22 +728,35 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if name == ACTIVE_LOG_NAME {
-            continue;
-        }
         let path = entry.path();
         let Ok(meta) = path.metadata() else { continue };
         if !meta.is_file() {
             continue;
         }
         let size = meta.len();
+        if name == ACTIVE_LOG_NAME {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&path)
+            {
+                Ok(_) => {
+                    bytes_freed += size;
+                    truncated += 1;
+                }
+                Err(e) => {
+                    log::warn!("could not truncate active log: {e}");
+                }
+            }
+            continue;
+        }
         if std::fs::remove_file(&path).is_ok() {
             bytes_freed += size;
             removed += 1;
         }
     }
     log::info!(
-        "cleared logs: removed {removed} file(s), freed {bytes_freed} bytes from {}",
+        "cleared logs: removed {removed} rotated file(s), truncated {truncated} active file(s), freed {bytes_freed} bytes from {}",
         redact_path(&dir.to_string_lossy())
     );
     Ok(bytes_freed)
@@ -684,6 +787,26 @@ pub fn open_log_dir(app: AppHandle) -> Result<(), AppError> {
     })?;
     log::info!("opened log dir {}", redact_path(&dir.to_string_lossy()));
     Ok(())
+}
+
+#[tauri::command]
+pub async fn history_list(
+    store: State<'_, HistoryStore>,
+) -> Result<Vec<history::HistoryEntry>, AppError> {
+    let s = (*store).clone();
+    history::list(s).await
+}
+
+#[tauri::command]
+pub async fn history_clear(store: State<'_, HistoryStore>) -> Result<(), AppError> {
+    let s = (*store).clone();
+    history::clear(s).await
+}
+
+#[tauri::command]
+pub async fn history_delete(store: State<'_, HistoryStore>, id: String) -> Result<(), AppError> {
+    let s = (*store).clone();
+    history::delete(s, id).await
 }
 
 #[tauri::command]

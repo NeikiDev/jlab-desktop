@@ -92,7 +92,7 @@ Single endpoint, no auth, public. Documented at <https://jlab.threat.rip/api-doc
 POST https://jlab.threat.rip/api/public/static-scan
 Content-Type: multipart/form-data
 Field:        file (≤ 50 MB, .jar)
-Rate limit:   5 requests / minute / IP
+Rate limit:   15 requests / minute / IP
 ```
 
 The endpoint only accepts a single `.jar`. The desktop client accepts a
@@ -115,7 +115,7 @@ broader set of inputs and unwraps containers locally before upload.
 - Multi-jar archives: the **largest inner `.jar` by uncompressed size** is
   picked. Rationale: in modpacks the largest jar is almost always the
   payload while bundled libraries already have their own signatures, and
-  the API is single-file + 5 req / minute, so scanning every jar is not
+  the API is single-file + 15 req / minute, so scanning every jar is not
   practical. Document any change to this policy.
 - Inner jar size limit: the extracted inner `.jar` itself must be ≤ 50 MB.
   This is what guards against zip bombs (the entry's uncompressed `size()`
@@ -168,7 +168,7 @@ A match has four optional fields. Any combination can appear, all four can be nu
 ## Design rules
 
 - **Tauri commands.** Currently `scan_jar(path)`, `check_status()`, and `open_url(url)`. Add new commands sparingly; prefer extending an existing flow.
-- **Outbound HTTP must send `x-jlab-client: web`.** Both `scan_jar` and `check_status` set it. Any future request to `jlab.threat.rip` must do the same.
+- **Outbound HTTP must send `x-jlab-client: desktop`.** Both `scan_jar` and `check_status` set it. Any future request to `jlab.threat.rip` must do the same.
 - **Errors are typed, not strings.** Always extend `AppError` (with a new `#[serde(rename_all = "snake_case")]` variant) and the matching union in `src/lib/types.ts`. Never return raw `String` errors to the frontend. The `ErrorBanner` component switches on `kind`.
 - **The frontend doesn't talk HTTP.** All network traffic goes through Rust. CSP is restrictive (`connect-src ipc:` only). Adding `fetch()` calls in the React code will be blocked.
 - **React functional components with hooks only.** No class components. Use `useState`, `useReducer`, `useMemo`, `useEffect`, `useRef`, `useCallback`. The `react-jsx` runtime is on, so no `import React` is needed in `.tsx` files. Do not enable `<StrictMode>` in `main.tsx` (the Tauri drag-drop listener and the `RemoteStatus` polling are designed for single-registration; StrictMode's dev double-mount would duplicate them).
@@ -211,8 +211,26 @@ When you write text that lands in the codebase (UI copy, comments, docs, commit 
 ## Things to deliberately NOT add
 
 - Auth / login (API is public).
-- History / persistence of past scans.
 - Telemetry of any kind.
+
+## Local history
+
+Past scans are persisted on the user's device, no network involved.
+
+- File: `history.json` in the Tauri app data dir (`AppHandle::path().app_data_dir()`,
+  resolved once at startup and stored in app state as `HistoryStore`).
+- Schema: `{ version: 1, entries: HistoryEntry[] }`. An entry holds `id`,
+  `scannedAt` (ISO 8601 UTC), `fileName`, `fileSizeBytes`, `sha256`,
+  `severityCounts`, `topSeverity`, and `signatureCount`. Mirrored in
+  `src/lib/types.ts`.
+- Cap: `HISTORY_CAP = 100` (in `src-tauri/src/history.rs`). On overflow the
+  oldest entries are dropped during `append`.
+- Writes are atomic (write to `history.json.tmp`, then rename). All file IO
+  runs on `tokio::task::spawn_blocking`.
+- No raw signature payload, no file bytes, and no API response body is
+  stored. Only the small summary above.
+- Append happens after a successful 200 from the scan endpoint. If history
+  IO fails the scan still succeeds; the failure is logged.
 
 ## CI
 

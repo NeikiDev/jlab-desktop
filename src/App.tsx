@@ -1,4 +1,4 @@
-import { useCallback, useReducer } from "react";
+import { useCallback, useReducer, useState } from "react";
 import DropZone from "./lib/components/DropZone";
 import ScanProgress from "./lib/components/ScanProgress";
 import SignatureList from "./lib/components/SignatureList";
@@ -8,6 +8,8 @@ import UpdaterButton from "./lib/components/UpdaterButton";
 import BrandMark from "./lib/components/BrandMark";
 import StateCrumb from "./lib/components/StateCrumb";
 import AppFooter from "./lib/components/AppFooter";
+import HistoryPanel from "./lib/components/HistoryPanel";
+import IdleDashboard from "./lib/components/IdleDashboard";
 import { cancelScan, isAppError, scanJar } from "./lib/api";
 import type { AppError, ScanResult, ScanState } from "./lib/types";
 
@@ -37,8 +39,13 @@ export default function App() {
     reducer,
     { state: "idle" } as ScanState,
   );
+  // Orthogonal to scan state: the history panel only takes over while idle.
+  // Starting a scan from anywhere implicitly returns the user to the scan
+  // view by leaving the idle state.
+  const [showingHistory, setShowingHistory] = useState(false);
 
   const startScan = useCallback(async (path: string) => {
+    setShowingHistory(false);
     dispatch({ type: "start", path });
     try {
       const result = await scanJar(path);
@@ -58,7 +65,10 @@ export default function App() {
     }
   }, []);
 
-  const reset = useCallback(() => dispatch({ type: "reset" }), []);
+  const reset = useCallback(() => {
+    setShowingHistory(false);
+    dispatch({ type: "reset" });
+  }, []);
   const retry = useCallback(() => {
     if (scan.state === "error" && scan.lastPath) {
       void startScan(scan.lastPath);
@@ -67,6 +77,9 @@ export default function App() {
   const cancel = useCallback(() => {
     void cancelScan();
   }, []);
+  const showHistory = useCallback(() => setShowingHistory(true), []);
+  const hideHistory = useCallback(() => setShowingHistory(false), []);
+  const inHistoryView = scan.state === "idle" && showingHistory;
 
   return (
     <>
@@ -105,48 +118,10 @@ export default function App() {
           />
         )}
 
-        {scan.state === "idle" && (
-          <div className="flex w-full flex-col gap-6 pt-6">
-            <section className="flex flex-col items-center gap-2 text-center">
-              <h1 className="m-0 text-[28px] font-semibold tracking-[-0.015em] text-text">
-                Scan a Java archive
-              </h1>
-              <p className="m-0 text-[14.5px] leading-[1.55] text-text-muted">
-                Drop a .jar (or a .zip / .mcpack / .mrpack containing one) to
-                check it against the JLab signature set.
-              </p>
-            </section>
+        {inHistoryView && <HistoryPanel onBack={hideHistory} />}
 
-            <DropZone onPick={startScan} />
-
-            <section className="grid grid-cols-3 gap-4 max-[820px]:grid-cols-1">
-              {STEPS.map((s, idx) => (
-                <article
-                  key={s.title}
-                  className="group relative overflow-hidden rounded-[var(--radius)] border border-border-faint bg-bg-plate/60 px-5 py-4 transition-[border-color,transform] duration-base ease-out hover:border-border-strong hover:[transform:translateY(-1px)_translateZ(0)]"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-border to-transparent opacity-60"
-                  />
-                  <div className="flex items-baseline justify-between">
-                    <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-text-dim">
-                      step&nbsp;{String(idx + 1).padStart(2, "0")}
-                    </span>
-                    <span aria-hidden="true" className="text-text-faint group-hover:text-accent transition-colors duration-base ease-out">
-                      {s.icon}
-                    </span>
-                  </div>
-                  <h4 className="m-0 mt-2 text-[15px] font-semibold text-text">
-                    {s.title}
-                  </h4>
-                  <p className="m-0 mt-1 text-[13px] leading-[1.5] text-text-muted">
-                    {s.body}
-                  </p>
-                </article>
-              ))}
-            </section>
-          </div>
+        {scan.state === "idle" && !showingHistory && (
+          <IdleDashboard onPick={startScan} onShowHistory={showHistory} />
         )}
 
         {scan.state === "error" && <DropZone onPick={startScan} />}
@@ -162,52 +137,3 @@ export default function App() {
     </>
   );
 }
-
-const STEPS: ReadonlyArray<{
-  title: string;
-  body: React.ReactNode;
-  icon: React.ReactNode;
-}> = [
-  {
-    title: "Pick a file",
-    body: (
-      <>
-        Drag in a <code className="font-mono text-[12px] text-text">.jar</code>,{" "}
-        <code className="font-mono text-[12px] text-text">.zip</code>,{" "}
-        <code className="font-mono text-[12px] text-text">.mcpack</code>, or{" "}
-        <code className="font-mono text-[12px] text-text">.mrpack</code>. Up to
-        50&nbsp;MB. The largest inner JAR is scanned.
-      </>
-    ),
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <path d="M5 3h7l3 3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-        <path d="M12 3v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    title: "Nothing is stored",
-    body: (
-      <>
-        Your file is held in memory on the JLab server only for the scan. No
-        copy is kept.
-      </>
-    ),
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <path d="M10 2.5 4 4.6V10c0 3.6 2.6 6.4 6 7.5 3.4-1.1 6-3.9 6-7.5V4.6L10 2.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-        <path d="M7.6 9.8 9.4 11.6 12.7 8.3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    title: "Read the report",
-    body: <>Matches are grouped by severity. Each row shows what triggered it.</>,
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <path d="M3.5 7.5h4v9h-4zM8.5 10.5h4v6h-4zM13.5 4.5h4v12h-4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-];

@@ -66,7 +66,7 @@ export default function LogControl() {
             type="button"
             disabled={busy}
             onClick={handleClear}
-            title="Delete every file in the log folder except the active log"
+            title="Delete rotated logs and reset the active log file"
             className="cursor-pointer rounded-sm border border-[color:var(--color-sev-critical-edge)] bg-sev-critical-soft px-1.5 py-0.5 text-sev-critical transition-colors duration-fast ease-out hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             confirm clear
@@ -84,7 +84,7 @@ export default function LogControl() {
         <button
           type="button"
           onClick={() => setConfirming(true)}
-          title="Delete rotated log files"
+          title="Delete rotated logs and reset the active log"
           className="cursor-pointer rounded-sm border-0 bg-transparent px-1 py-0.5 text-text-muted transition-colors duration-fast ease-out hover:text-text"
         >
           clear

@@ -18,6 +18,7 @@ Native desktop client for the public [JLab static JAR scanner](https://jlab.thre
 - Inline error banner with a live `Retry-After` countdown for rate limits (HTTP 429).
 - Local size validation (50 MB) and zip-magic check before any network call.
 - Cancellable scans, phase-aware progress UI with a live event log.
+- Local scan history (last 100 scans, summary only). Stored on your device, never uploaded. File bytes and signature payloads are not persisted.
 - Small (well under 10 MB), starts fast, no telemetry, no auth.
 
 ## Download
@@ -109,7 +110,7 @@ The app talks to a single endpoint:
 POST https://jlab.threat.rip/api/public/static-scan
 Content-Type: multipart/form-data
 Field:        file (max 50 MB, .jar archive)
-Rate limit:   5 requests / minute / IP
+Rate limit:   15 requests / minute / IP
 ```
 
 For `.zip`, `.mcpack`, and `.mrpack` drops, the desktop client opens the archive locally, picks the largest inner `.jar`, and uploads only that file. The endpoint itself only accepts `.jar`.

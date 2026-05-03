@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppError,
   ConfirmedFamily,
+  HistoryEntry,
   RatterScannerIntel,
   ScanPhaseEvent,
   ScanResult,
@@ -186,14 +187,30 @@ function normalizeThreatRip(v: unknown): ThreatRipIntel | null {
   };
 }
 
+function normalizeRatterGithubInfo(v: unknown) {
+  const o = asObj(v);
+  if (!o) return null;
+  const info = {
+    name: asStr(o.name),
+    owner: asStr(o.owner),
+    projectName: asStr(o.projectName),
+    repoUrl: asStr(o.repoUrl),
+    downloadUrl: asStr(o.downloadUrl),
+  };
+  if (!info.name && !info.owner && !info.projectName && !info.repoUrl) return null;
+  return info;
+}
+
 function normalizeRatter(v: unknown): RatterScannerIntel | null {
   const o = asObj(v);
   if (!o) return null;
   return {
     available: asBool(o.available),
-    verdict: asStr(o.verdict),
-    detections: asNum(o.detections),
-    totalScanners: asNum(o.totalScanners),
+    safe: asBool(o.safe),
+    malicious: asBool(o.malicious),
+    automatedSafe: asBool(o.automated_safe),
+    hash: asStr(o.hash),
+    githubInfo: normalizeRatterGithubInfo(o.githubInfo),
   };
 }
 
@@ -358,6 +375,18 @@ export async function clearLogs(): Promise<number> {
   return await invoke<number>("clear_logs");
 }
 
+export async function historyList(): Promise<HistoryEntry[]> {
+  return await invoke<HistoryEntry[]>("history_list");
+}
+
+export async function historyClear(): Promise<void> {
+  await invoke<void>("history_clear");
+}
+
+export async function historyDelete(id: string): Promise<void> {
+  await invoke<void>("history_delete", { id });
+}
+
 export const SCAN_PHASE_EVENT = "scan://phase";
 
 type PhaseHandler = (event: ScanPhaseEvent) => void;
@@ -433,6 +462,8 @@ export function appErrorToUserText(err: AppError): string {
       return `Could not read archive: ${err.message}`;
     case "cancelled":
       return "Scan cancelled.";
+    case "history_io":
+      return `Could not read scan history: ${err.message}`;
   }
 }
 
