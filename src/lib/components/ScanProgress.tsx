@@ -31,7 +31,7 @@ const TIPS = [
   "Drag and drop works anywhere in this window.",
   "Results are grouped by severity, with critical first.",
   "Each match shows the class and method that triggered it.",
-  "Up to 50 MB per file. Five scans per minute.",
+  "Up to 50 MB per file. 15 scans per minute.",
 ];
 
 type StepState = "queued" | "running" | "done" | "error";
