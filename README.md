@@ -19,7 +19,7 @@ Native desktop client for the public [JLab static JAR scanner](https://jlab.thre
 - Local size validation (50 MB) and zip-magic check before any network call.
 - Cancellable scans, phase-aware progress UI with a live event log.
 - Local scan history (last 100 scans, summary only). Stored on your device, never uploaded. File bytes and signature payloads are not persisted.
-- Small (well under 10 MB), starts fast, no telemetry, no auth.
+- Small (well under 10 MB), starts fast, no analytics, no auth. The header status indicator pings `jlab.threat.rip/api/stats` once on launch and then once a minute while the window is visible. Each scan also fetches `jlab.threat.rip/api/public/threat-intel/<sha256>` to enrich the report. See [SECURITY.md](SECURITY.md#network-surface) for the full list of outbound endpoints.
 
 ## Download
 
