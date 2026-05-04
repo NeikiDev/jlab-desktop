@@ -830,7 +830,7 @@ pub async fn history_delete(store: State<'_, HistoryStore>, id: String) -> Resul
 }
 
 #[tauri::command]
-pub fn open_url(url: String) -> Result<(), AppError> {
+pub fn open_url(app: AppHandle, url: String) -> Result<(), AppError> {
     let allowed = url.starts_with("https://www.threat.rip/")
         || url.starts_with("https://threat.rip/")
         || url.starts_with("https://jlab.threat.rip/")
@@ -842,21 +842,12 @@ pub fn open_url(url: String) -> Result<(), AppError> {
         });
     }
 
-    #[cfg(target_os = "macos")]
-    let cmd = std::process::Command::new("open").arg(&url).spawn();
-
-    #[cfg(target_os = "windows")]
-    let cmd = std::process::Command::new("cmd")
-        .args(["/C", "start", "", &url])
-        .spawn();
-
-    #[cfg(target_os = "linux")]
-    let cmd = std::process::Command::new("xdg-open").arg(&url).spawn();
-
-    cmd.map_err(|e| AppError::Io {
-        message: e.to_string(),
-    })?;
-    Ok(())
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| AppError::Io {
+            message: e.to_string(),
+        })
 }
 
 const RELEASES_API: &str = "https://api.github.com/repos/NeikiDev/jlab-desktop/releases/latest";
