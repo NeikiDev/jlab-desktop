@@ -154,12 +154,36 @@ fn ensure_dir(store: &HistoryStore) -> Result<(), AppError> {
     })
 }
 
+/// Load the history file from disk, or fall back to an empty default.
+///
+/// On parse failure the bad file is renamed to `history.json.corrupt`
+/// before we return the default. Without that step the next `append` would
+/// silently overwrite the unreadable file with an empty one and the user
+/// would lose every prior entry with no warning. Renaming preserves the
+/// data for inspection and leaves a log line the user can find through the
+/// existing log control.
 fn read_or_default(path: &Path) -> HistoryFile {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(_) => return HistoryFile::default(),
     };
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    match serde_json::from_slice(&bytes) {
+        Ok(file) => file,
+        Err(e) => {
+            let bak = path.with_extension("json.corrupt");
+            if let Err(rename_err) = std::fs::rename(path, &bak) {
+                log::warn!(
+                    "history.json failed to parse ({e}); could not move aside ({rename_err}), starting empty"
+                );
+            } else {
+                log::warn!(
+                    "history.json failed to parse ({e}); moved to {} and starting empty",
+                    bak.display()
+                );
+            }
+            HistoryFile::default()
+        }
+    }
 }
 
 fn write_atomic(store: &HistoryStore, contents: &HistoryFile) -> Result<(), AppError> {
@@ -323,5 +347,33 @@ mod tests {
         let e = build_entry(&scan, "x.jar", 0, "00");
         assert_eq!(e.signature_count, 0);
         assert_eq!(e.top_severity, "info");
+    }
+
+    #[test]
+    fn corrupt_history_is_moved_aside() {
+        let dir = std::env::temp_dir().join(format!(
+            "jlab-history-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        let bak = dir.join("history.json.corrupt");
+
+        std::fs::write(&path, b"{not json").unwrap();
+
+        let file = read_or_default(&path);
+        assert!(
+            file.entries.is_empty(),
+            "expected empty default on parse failure"
+        );
+        assert!(!path.exists(), "expected the bad file to be moved aside");
+        assert!(bak.exists(), "expected history.json.corrupt to exist");
+        assert_eq!(std::fs::read(&bak).unwrap(), b"{not json");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
