@@ -68,12 +68,15 @@ you want.
 
 ## Signing keys
 
-Builds are not yet signed with platform code-signing certificates. The
-auto-updater uses a separate Tauri signing keypair. The public key is
-checked into `src-tauri/tauri.conf.json`. The private key is held only in
-the GitHub Actions secret store and is rotated if we believe it has been
-exposed. Rotations are announced in the release notes for the affected
-version.
+Builds are not yet signed with platform code-signing certificates.
+Updates are manual today: the app links to the latest GitHub release
+page and the user runs the installer themselves. There is no in-app
+auto-updater and no Tauri updater signing keypair in use.
+
+When the in-app updater is wired up, the public key will be checked
+into `src-tauri/tauri.conf.json` and the private key will live in the
+GitHub Actions secret store. Rotations will be announced in the release
+notes for the affected version.
 
 ## Hardening already in place
 
