@@ -100,19 +100,20 @@ export async function scanJar(path: string): Promise<ScanResult> {
   }
   const t2 = performance.now();
 
-  const raw = envelope?.scan;
-  if (!raw || typeof raw !== "object" || !Array.isArray(raw.signatures)) {
+  const rawObj = asObj(envelope?.scan);
+  const rawSignatures = rawObj && Array.isArray(rawObj.signatures) ? rawObj.signatures : null;
+  if (!rawObj || !rawSignatures) {
     throw clientError(
       "shape",
       new Error("missing signatures array"),
       "Scan result was not in the expected shape",
     );
   }
-  console.log(`[scanJar] JSON.parse in ${(t2 - t1).toFixed(0)}ms, ${raw.signatures.length} sigs`);
+  console.log(`[scanJar] JSON.parse in ${(t2 - t1).toFixed(0)}ms, ${rawSignatures.length} sigs`);
 
   let signatures: Signature[];
   try {
-    signatures = raw.signatures.map((s, i) => {
+    signatures = (rawSignatures as ApiSignature[]).map((s, i) => {
       const matches: SignatureMatch[] = (s.matches ?? []).map((m) => ({
         className: m.className ?? null,
         member: m.member ?? null,
@@ -137,7 +138,7 @@ export async function scanJar(path: string): Promise<ScanResult> {
   const t3 = performance.now();
   console.log(`[scanJar] mapped payload in ${(t3 - t2).toFixed(0)}ms`);
 
-  const confirmedFamilies = normalizeConfirmedFamilies(raw.confirmedFamilies, signatures);
+  const confirmedFamilies = normalizeConfirmedFamilies(rawObj.confirmedFamilies, signatures);
   const sha256 =
     typeof envelope.sha256 === "string" && envelope.sha256.length > 0
       ? envelope.sha256
@@ -145,11 +146,11 @@ export async function scanJar(path: string): Promise<ScanResult> {
   const threatIntel = normalizeThreatIntel(envelope.threatIntel, sha256);
 
   return {
-    success: raw.success,
-    fileName: raw.fileName,
-    fileSize: raw.fileSize,
-    totalSignatures: raw.totalSignatures,
-    matchedSignatures: raw.matchedSignatures,
+    success: asBool(rawObj.success, false),
+    fileName: asStr(rawObj.fileName) ?? "(unknown file)",
+    fileSize: asNum(rawObj.fileSize) ?? 0,
+    totalSignatures: asNum(rawObj.totalSignatures) ?? signatures.length,
+    matchedSignatures: asNum(rawObj.matchedSignatures) ?? signatures.length,
     signatures,
     confirmedFamilies,
     sha256,
