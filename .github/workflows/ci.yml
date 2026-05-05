@@ -154,5 +154,32 @@ jobs:
       - name: cargo audit
         working-directory: src-tauri
         # Ignore unsound advisories on transitive deps we cannot directly upgrade:
-        # glib 0.18.5 and rand 0.7.3 come through tauri's dep tree.
+        # - RUSTSEC-2024-0429 (glib 0.18.5): comes via tauri. Re-evaluate on
+        #   every Tauri minor bump; drop the ignore once tauri ships a glib
+        #   bump that lands a fixed version.
+        # - RUSTSEC-2026-0097 (rand 0.7.3): same story, transitive via tauri.
         run: cargo audit --deny unsound --deny yanked --ignore RUSTSEC-2024-0429 --ignore RUSTSEC-2026-0097
+
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: npm audit
+        # Mirror the cargo-audit gate on the npm tree. Dependabot proposes
+        # upgrade PRs but does not block merges, so vulnerable transitive
+        # deps could otherwise slip in. `--audit-level=high` keeps the noise
+        # floor sensible (low/moderate advisories on dev-only deps do not
+        # fail CI). `--omit=dev` skips dev-only deps that never ship.
+        run: npm audit --audit-level=high --omit=dev
