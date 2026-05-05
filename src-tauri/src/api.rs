@@ -182,16 +182,16 @@ fn has_zip_magic(bytes: &[u8]) -> bool {
 // pick the largest inner .jar by uncompressed size and scan that one. The
 // largest is almost always the actual mod / payload, while the rest are
 // libraries already covered by their own signatures.
-fn extract_largest_jar(container_bytes: Vec<u8>) -> Result<(Vec<u8>, String, usize), AppError> {
-    extract_largest_jar_capped(container_bytes, MAX_BYTES)
-}
-
-fn extract_largest_jar_capped(
-    container_bytes: Vec<u8>,
+//
+// Generic over `R: Read + Seek` so callers can hand in either a
+// `std::fs::File` (the production path, no full-archive buffering) or a
+// `Cursor<Vec<u8>>` (tests). `zip::ZipArchive` only needs `Read + Seek`,
+// not a contiguous slice in memory.
+fn extract_largest_jar_from_reader<R: std::io::Read + std::io::Seek>(
+    reader: R,
     max_bytes: u64,
 ) -> Result<(Vec<u8>, String, usize), AppError> {
-    let cursor = std::io::Cursor::new(container_bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::InvalidArchive {
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| AppError::InvalidArchive {
         message: format!("could not open archive: {e}"),
     })?;
 
@@ -382,30 +382,37 @@ async fn run_scan(
 
     emit_phase(app, started, "read", "running", None);
     let read_started = Instant::now();
-    let raw_bytes = tokio::select! {
-        biased;
-        _ = cancel.notified() => return Err(AppError::Cancelled),
-        res = tokio::fs::read(p) => res?,
-    };
-    log::debug!(
-        "read {} bytes from disk in {}ms fingerprint={}",
-        raw_bytes.len(),
-        read_started.elapsed().as_millis(),
-        fingerprint(&raw_bytes)
-    );
-
-    if !has_zip_magic(&raw_bytes) {
-        return Err(AppError::UnsupportedFile {
-            extension: ext.clone(),
-            allowed: allowed_exts(),
-        });
-    }
 
     let (bytes, upload_name) = if is_container {
+        // Stream the outer archive: open it inside the blocking task and
+        // hand the file handle straight to `zip::ZipArchive`. Avoids a
+        // 50 MB `Vec<u8>` allocation per scan that the previous
+        // `tokio::fs::read` -> `Cursor` path required (see issue #22 and the
+        // CLAUDE.md note in the "Performance" section).
+        let path_owned = path.clone();
+        let ext_for_err = ext.clone();
         let (extracted, inner_name, jar_count) = tokio::select! {
             biased;
             _ = cancel.notified() => return Err(AppError::Cancelled),
-            res = tokio::task::spawn_blocking(move || extract_largest_jar(raw_bytes)) => {
+            res = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, String, usize), AppError> {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut f = std::fs::File::open(&path_owned)
+                    .map_err(|e| AppError::Io { message: e.to_string() })?;
+                // Renamed text files (e.g. someone dropping `notes.txt` as
+                // `pack.zip`) get the same UnsupportedFile error the buffered
+                // path produced. Done inside the blocking task so we don't need
+                // a separate async pre-read.
+                let mut header = [0u8; 4];
+                if f.read_exact(&mut header).is_err() || !has_zip_magic(&header) {
+                    return Err(AppError::UnsupportedFile {
+                        extension: ext_for_err,
+                        allowed: allowed_exts(),
+                    });
+                }
+                f.seek(SeekFrom::Start(0))
+                    .map_err(|e| AppError::Io { message: e.to_string() })?;
+                extract_largest_jar_from_reader(f, MAX_BYTES)
+            }) => {
                 res.map_err(|e| AppError::Io { message: format!("extract task: {e}") })??
             },
         };
@@ -427,6 +434,25 @@ async fn run_scan(
         );
         (extracted, inner_name)
     } else {
+        // Plain `.jar`: we still need the bytes in memory to compute sha256
+        // and build the multipart upload, so the buffered read stays.
+        let raw_bytes = tokio::select! {
+            biased;
+            _ = cancel.notified() => return Err(AppError::Cancelled),
+            res = tokio::fs::read(p) => res?,
+        };
+        log::debug!(
+            "read {} bytes from disk in {}ms fingerprint={}",
+            raw_bytes.len(),
+            read_started.elapsed().as_millis(),
+            fingerprint(&raw_bytes)
+        );
+        if !has_zip_magic(&raw_bytes) {
+            return Err(AppError::UnsupportedFile {
+                extension: ext.clone(),
+                allowed: allowed_exts(),
+            });
+        }
         emit_phase(
             app,
             started,
@@ -829,42 +855,66 @@ pub async fn history_delete(store: State<'_, HistoryStore>, id: String) -> Resul
     history::delete(s, id).await
 }
 
+/// Accepts any `https://github.com/<owner>/<repo>` URL (with optional sub-path,
+/// query, or fragment). Used so RatterScanner verified-source links to
+/// third-party repos open in the browser, while still rejecting things like
+/// `https://github.com.attacker.example/`.
+fn is_github_repo_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://github.com/") else {
+        return false;
+    };
+    // Stop the path at the first `?` or `#`, then split into segments.
+    let path = rest.split(['?', '#']).next().unwrap_or("");
+    let mut segments = path.split('/');
+    let owner = segments.next().unwrap_or("");
+    let repo = segments.next().unwrap_or("");
+    let valid_segment = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    };
+    valid_segment(owner) && valid_segment(repo)
+}
+
 #[tauri::command]
-pub fn open_url(url: String) -> Result<(), AppError> {
+pub fn open_url(app: AppHandle, url: String) -> Result<(), AppError> {
     let allowed = url.starts_with("https://www.threat.rip/")
         || url.starts_with("https://threat.rip/")
         || url.starts_with("https://jlab.threat.rip/")
         || url.starts_with("https://www.virustotal.com/")
-        || url.starts_with("https://github.com/NeikiDev/jlab-desktop/");
+        || is_github_repo_url(&url);
     if !allowed {
         return Err(AppError::Network {
             message: "url not allowed".into(),
         });
     }
 
-    #[cfg(target_os = "macos")]
-    let cmd = std::process::Command::new("open").arg(&url).spawn();
-
-    #[cfg(target_os = "windows")]
-    let cmd = std::process::Command::new("cmd")
-        .args(["/C", "start", "", &url])
-        .spawn();
-
-    #[cfg(target_os = "linux")]
-    let cmd = std::process::Command::new("xdg-open").arg(&url).spawn();
-
-    cmd.map_err(|e| AppError::Io {
-        message: e.to_string(),
-    })?;
-    Ok(())
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| AppError::Io {
+            message: e.to_string(),
+        })
 }
 
+// `releases/latest` excludes prereleases by default, so update notifications
+// only ever offer stable releases. A user on `0.2.1-rc1` is offered `0.2.1`
+// stable, never a hypothetical `0.2.2-rc1`. If we ever want to surface newer
+// prereleases to users already on a prerelease, switch to
+// `releases?per_page=10` and pick the highest tag the comparator allows.
 const RELEASES_API: &str = "https://api.github.com/repos/NeikiDev/jlab-desktop/releases/latest";
 const RELEASES_PAGE: &str = "https://github.com/NeikiDev/jlab-desktop/releases/latest";
 
 #[tauri::command]
 pub fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+pub fn history_cap() -> usize {
+    crate::history::HISTORY_CAP
 }
 
 #[derive(Debug, Serialize)]
@@ -876,14 +926,58 @@ pub struct UpdateInfo {
     pub release_url: String,
 }
 
-fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
+/// Parse a version string into `(major, minor, patch)` plus an optional
+/// prerelease tag. Build metadata (`+...`) is ignored, matching semver.
+///
+/// We deliberately keep the prerelease as a string and compare it
+/// lexicographically. That's not full semver precedence, but it is enough
+/// for the shapes this project uses (`-rc1`, `-beta.2`, `-alpha`) and avoids
+/// pulling in the `semver` crate for one comparison site.
+fn parse_version(s: &str) -> Option<((u64, u64, u64), Option<String>)> {
     let s = s.trim_start_matches('v').trim();
-    let core = s.split(['-', '+']).next()?;
+    let (core, pre) = match s.split_once('-') {
+        Some((c, rest)) => {
+            let pre = rest.split('+').next().unwrap_or("");
+            (
+                c,
+                if pre.is_empty() {
+                    None
+                } else {
+                    Some(pre.to_string())
+                },
+            )
+        }
+        None => (s.split('+').next().unwrap_or(s), None),
+    };
     let mut parts = core.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next().unwrap_or("0").parse().ok()?;
     let patch = parts.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor, patch))
+    Some(((major, minor, patch), pre))
+}
+
+/// Returns true when `latest` is strictly newer than `current`.
+///
+/// Semver rule we care about: a release without a prerelease tag ranks above
+/// any release with one that shares the same numeric core. So `0.2.1` beats
+/// `0.2.1-rc1`, but `0.2.1-rc1` does not beat `0.2.1`. Two prereleases on
+/// the same core are compared lexicographically.
+fn is_newer(current: &str, latest: &str) -> bool {
+    let Some((c_core, c_pre)) = parse_version(current) else {
+        return false;
+    };
+    let Some((l_core, l_pre)) = parse_version(latest) else {
+        return false;
+    };
+    if l_core != c_core {
+        return l_core > c_core;
+    }
+    match (c_pre.as_deref(), l_pre.as_deref()) {
+        (None, None) => false,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (Some(c), Some(l)) => l > c,
+    }
 }
 
 #[tauri::command]
@@ -922,13 +1016,10 @@ pub async fn check_for_update(http: State<'_, HttpClient>) -> Result<UpdateInfo,
         .to_string();
     let latest = if tag.is_empty() { None } else { Some(tag) };
 
-    let available = match (
-        parse_semver(&current),
-        latest.as_deref().and_then(parse_semver),
-    ) {
-        (Some(c), Some(l)) => l > c,
-        _ => false,
-    };
+    let available = latest
+        .as_deref()
+        .map(|l| is_newer(&current, l))
+        .unwrap_or(false);
 
     Ok(UpdateInfo {
         current_version: current,
@@ -1040,7 +1131,7 @@ mod tests {
         bytes[cd_off + 24..cd_off + 28].copy_from_slice(&lie.to_le_bytes());
 
         let max_bytes: u64 = 1024;
-        let result = extract_largest_jar_capped(bytes, max_bytes);
+        let result = extract_largest_jar_from_reader(Cursor::new(bytes), max_bytes);
 
         match result {
             Err(AppError::TooLarge { max_mb }) => {
@@ -1048,5 +1139,151 @@ mod tests {
             }
             other => panic!("expected TooLarge, got {other:?}"),
         }
+    }
+
+    // Locks in the streaming path: build a real outer zip on disk, hand the
+    // file handle (not a pre-buffered Vec) to extract_largest_jar_from_reader,
+    // and confirm the inner jar bytes round-trip.
+    #[test]
+    fn extracts_largest_jar_from_file_handle() {
+        let payload_small = b"PK\x03\x04small jar bytes".to_vec();
+        let payload_big = b"PK\x03\x04this is the bigger jar".to_vec();
+
+        let mut bytes: Vec<u8> = Vec::new();
+        {
+            let mut zip = ZipWriter::new(Cursor::new(&mut bytes));
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zip.start_file("libs/small.jar", opts).unwrap();
+            zip.write_all(&payload_small).unwrap();
+            zip.start_file("payload/big.jar", opts).unwrap();
+            zip.write_all(&payload_big).unwrap();
+            zip.start_file("readme.txt", opts).unwrap();
+            zip.write_all(b"not a jar").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "jlab-stream-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("outer.zip");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let f = std::fs::File::open(&path).unwrap();
+        let (extracted, inner_name, jar_count) =
+            extract_largest_jar_from_reader(f, 64 * 1024).unwrap();
+
+        assert_eq!(jar_count, 2);
+        assert_eq!(inner_name, "big.jar");
+        assert_eq!(extracted, payload_big);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_version_keeps_prerelease_and_drops_build() {
+        assert_eq!(parse_version("0.2.1"), Some(((0, 2, 1), None)));
+        assert_eq!(parse_version("v0.2.1"), Some(((0, 2, 1), None)));
+        assert_eq!(
+            parse_version("0.2.1-rc1"),
+            Some(((0, 2, 1), Some("rc1".into())))
+        );
+        assert_eq!(
+            parse_version("0.2.1-beta.2"),
+            Some(((0, 2, 1), Some("beta.2".into())))
+        );
+        // Build metadata is ignored on both sides.
+        assert_eq!(parse_version("0.2.1+commit.abc"), Some(((0, 2, 1), None)));
+        assert_eq!(
+            parse_version("0.2.1-rc1+commit.abc"),
+            Some(((0, 2, 1), Some("rc1".into())))
+        );
+        assert_eq!(parse_version("garbage"), None);
+    }
+
+    // Issue #18 regression: a user on a prerelease should be told about the
+    // matching stable release.
+    #[test]
+    fn rc_user_sees_stable_release() {
+        assert!(is_newer("0.2.1-rc1", "0.2.1"));
+        assert!(is_newer("v0.2.1-rc1", "v0.2.1"));
+    }
+
+    #[test]
+    fn stable_user_does_not_get_offered_prerelease_with_same_core() {
+        assert!(!is_newer("0.2.1", "0.2.1-rc1"));
+    }
+
+    #[test]
+    fn newer_core_always_wins_regardless_of_prerelease() {
+        assert!(is_newer("0.2.1", "0.2.2"));
+        assert!(is_newer("0.2.1", "0.2.2-rc1"));
+        assert!(is_newer("0.2.1-rc9", "0.2.2-rc1"));
+        assert!(!is_newer("0.2.2", "0.2.1"));
+    }
+
+    #[test]
+    fn equal_versions_are_not_newer() {
+        assert!(!is_newer("0.2.1", "0.2.1"));
+        assert!(!is_newer("0.2.1-rc1", "0.2.1-rc1"));
+    }
+
+    #[test]
+    fn two_prereleases_compared_lexicographically() {
+        assert!(is_newer("0.2.1-rc1", "0.2.1-rc2"));
+        assert!(!is_newer("0.2.1-rc2", "0.2.1-rc1"));
+        // alpha < beta < rc lexicographically, which is what we want here.
+        assert!(is_newer("0.2.1-alpha", "0.2.1-beta"));
+    }
+
+    #[test]
+    fn unparseable_input_is_treated_as_no_update() {
+        assert!(!is_newer("garbage", "0.2.1"));
+        assert!(!is_newer("0.2.1", "garbage"));
+    }
+
+    #[test]
+    fn github_repo_url_accepts_third_party_repos() {
+        assert!(is_github_repo_url(
+            "https://github.com/some-owner/some-repo"
+        ));
+        assert!(is_github_repo_url(
+            "https://github.com/NeikiDev/jlab-desktop/"
+        ));
+        assert!(is_github_repo_url(
+            "https://github.com/NeikiDev/jlab-desktop/releases/latest"
+        ));
+        assert!(is_github_repo_url(
+            "https://github.com/owner/repo?tab=readme"
+        ));
+        assert!(is_github_repo_url("https://github.com/a/b#frag"));
+        assert!(is_github_repo_url("https://github.com/o.w-n_er/repo.name"));
+    }
+
+    #[test]
+    fn github_repo_url_rejects_lookalikes_and_garbage() {
+        // host smuggling
+        assert!(!is_github_repo_url(
+            "https://github.com.attacker.example/owner/repo"
+        ));
+        assert!(!is_github_repo_url(
+            "https://attacker.example/github.com/owner/repo"
+        ));
+        // wrong scheme
+        assert!(!is_github_repo_url("http://github.com/owner/repo"));
+        // missing repo segment
+        assert!(!is_github_repo_url("https://github.com/owner"));
+        assert!(!is_github_repo_url("https://github.com/owner/"));
+        assert!(!is_github_repo_url("https://github.com/"));
+        // path traversal-ish
+        assert!(!is_github_repo_url("https://github.com/../repo"));
+        assert!(!is_github_repo_url("https://github.com/owner/.."));
+        // disallowed chars
+        assert!(!is_github_repo_url("https://github.com/own er/repo"));
     }
 }

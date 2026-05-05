@@ -4,7 +4,7 @@ Thanks for the interest. This project is small and pragmatic. Here is what helps
 
 ## Branch model
 
-- `main` is the release branch. Every merge to `main` triggers a release build for macOS and Windows on the GitHub Releases page.
+- `main` is the release branch. Every merge to `main` triggers release builds for macOS, Windows, and Linux on the GitHub Releases page.
 - `dev` is the working branch. New features and fixes go on `dev` first (or on a feature branch into `dev`).
 - Pull requests target `main` only when the change is ready to ship. Direct pushes to `main` are not allowed; the branch is protected.
 
@@ -14,7 +14,7 @@ In short: **work on `dev`, ship from `main`**.
 
 Open an issue with:
 
-- OS and version (macOS or Windows build).
+- OS and version (macOS, Windows, or Linux build; for Linux include the distro and whether the install came from the `.deb`, `.rpm`, or AppImage artifact).
 - App version (from the title bar or `package.json`).
 - Steps to reproduce.
 - A redacted JAR or its signatures, if relevant.
@@ -39,7 +39,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 cargo check  --manifest-path src-tauri/Cargo.toml             # Rust type-check
 ```
 
-The CI also runs `gitleaks detect` to catch accidental secret commits, and a `tauri build --debug` smoke job on macOS and Windows so config breakage shows up before release.
+The CI also runs `gitleaks detect` to catch accidental secret commits, and a `tauri build --debug` smoke job on macOS, Windows, and Linux (Ubuntu 24.04) so config breakage shows up before release.
 
 ## Local development
 
@@ -56,7 +56,7 @@ Releases are continuous. The version-gate runs on every push to `main`:
 
 1. CI reads the version from `src-tauri/tauri.conf.json`.
 2. If a tag `v<version>` already exists, the release job is skipped (no duplicates).
-3. Otherwise, CI builds macOS (universal) and Windows (NSIS + MSI), creates the `v<version>` git tag, and publishes a GitHub Release with the bundles and the signed updater manifest attached.
+3. Otherwise, CI builds macOS (universal), Windows (NSIS + MSI), and Linux (`.deb`, `.rpm`, AppImage), creates the `v<version>` git tag, and publishes a GitHub Release with all bundles attached. There is no signed updater manifest today; updates are manual via the GitHub Release page on every platform.
 
 To cut a new release:
 

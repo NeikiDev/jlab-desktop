@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import DropZone from "./DropZone";
 import Sha256Chip from "./Sha256Chip";
-import { historyList } from "../api";
+import { historyCap, historyList } from "../api";
 import type { HistoryEntry, Severity } from "../types";
 import { cn } from "../cn";
 
@@ -10,7 +10,9 @@ interface Props {
   onShowHistory: () => void;
 }
 
-const HISTORY_CAP = 100;
+// Fallback while the IPC fetch is in flight. The real value comes from the
+// Rust constant via the `history_cap` command, so the two never drift.
+const HISTORY_CAP_FALLBACK = 100;
 
 const SEV_DOT: Record<Severity, string> = {
   critical: "bg-sev-critical",
@@ -47,6 +49,7 @@ function formatRelative(iso: string, now: number): string {
 
 export default function IdleDashboard({ onPick, onShowHistory }: Props) {
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
+  const [cap, setCap] = useState<number>(HISTORY_CAP_FALLBACK);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -58,6 +61,13 @@ export default function IdleDashboard({ onPick, onShowHistory }: Props) {
       .catch((e) => {
         console.warn("[IdleDashboard] history list failed", e);
         if (!cancelled) setHistory([]);
+      });
+    historyCap()
+      .then((v) => {
+        if (!cancelled && Number.isFinite(v) && v > 0) setCap(v);
+      })
+      .catch((e) => {
+        console.warn("[IdleDashboard] history cap failed", e);
       });
     return () => {
       cancelled = true;
@@ -85,7 +95,7 @@ export default function IdleDashboard({ onPick, onShowHistory }: Props) {
       <div className="grid gap-4 grid-cols-2 max-[820px]:grid-cols-1">
         <Module
           label="recent scans"
-          subtitle={total === 0 ? "empty" : `${total}/${HISTORY_CAP} stored`}
+          subtitle={total === 0 ? "empty" : `${total}/${cap} stored`}
           delay={60}
         >
           {recent === null ? (

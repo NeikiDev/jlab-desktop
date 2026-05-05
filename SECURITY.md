@@ -78,6 +78,26 @@ into `src-tauri/tauri.conf.json` and the private key will live in the
 GitHub Actions secret store. Rotations will be announced in the release
 notes for the affected version.
 
+## Network surface
+
+The desktop client only talks to two hosts. There is no analytics endpoint, no
+crash reporter, and no third-party SDK. Every outbound request goes through
+Rust; the webview itself cannot reach the network (`connect-src ipc:`).
+
+| When                          | Method | URL                                                                  |
+| ----------------------------- | ------ | -------------------------------------------------------------------- |
+| Per scan (file upload)        | POST   | `https://jlab.threat.rip/api/public/static-scan`                     |
+| Per scan (report enrichment)  | GET    | `https://jlab.threat.rip/api/public/threat-intel/<sha256>`           |
+| Once on launch, then every 60s while the window is visible | GET    | `https://jlab.threat.rip/api/stats`                                  |
+| Once on launch (update check) | GET    | `https://api.github.com/repos/NeikiDev/jlab-desktop/releases/latest` |
+
+The status poll pauses while the window is hidden (Dock-minimized, hidden
+behind another app on a different Space, or the OS reports it as not visible)
+and resumes when it becomes visible again. Requests to `jlab.threat.rip` carry
+an `x-jlab-client: desktop` header so the API can tell desktop traffic from
+browser traffic; they do not include any user identifier, file path, machine
+ID, or scan content.
+
 ## Hardening already in place
 
 For context, here is what the client does to limit blast radius:
@@ -87,6 +107,13 @@ For context, here is what the client does to limit blast radius:
 - File size and zip-magic are validated before any network call.
 - Inner-jar size is checked against 50 MB before extraction, which guards
   against zip bombs.
-- The client only opens URLs on a small allowlist of `threat.rip` hosts.
+- The client only opens URLs that match a small allowlist: `threat.rip`,
+  `www.threat.rip`, `jlab.threat.rip`, `www.virustotal.com` (third-party
+  intel `View` links), and any `github.com/<owner>/<repo>` URL. GitHub
+  repos are accepted broadly because RatterScanner verified-source links
+  point at third-party projects, but the host is checked exactly so
+  lookalikes like `github.com.attacker.example` are rejected. The full
+  check lives in `open_url` (and `is_github_repo_url`) in
+  `src-tauri/src/api.rs`.
 - The Tauri capability set grants only what the UI uses (dialog, log,
   window, internal devtools toggle).

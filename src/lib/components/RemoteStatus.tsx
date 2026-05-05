@@ -39,11 +39,40 @@ export default function RemoteStatus() {
   }
 
   useEffect(() => {
-    void run();
-    const id = window.setInterval(() => {
+    let intervalId: number | null = null;
+
+    const startInterval = () => {
+      if (intervalId !== null) return;
+      intervalId = window.setInterval(() => {
+        void run();
+      }, REFRESH_MS);
+    };
+
+    const stopInterval = () => {
+      if (intervalId === null) return;
+      window.clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    if (document.visibilityState !== "hidden") {
       void run();
-    }, REFRESH_MS);
-    return () => window.clearInterval(id);
+      startInterval();
+    }
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        stopInterval();
+      } else {
+        void run();
+        startInterval();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      stopInterval();
+    };
   }, []);
 
   const label =

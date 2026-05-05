@@ -4,7 +4,7 @@ Notes for Claude (and humans) working on this repo.
 
 ## What this is
 
-Cross-platform (macOS + Windows) desktop client for the public **JLab static
+Cross-platform (macOS, Windows, Linux) desktop client for the public **JLab static
 JAR scanner** at `https://jlab.threat.rip/api/public/static-scan`. User drops
 a `.jar` (or a `.zip` / `.mcpack` / `.mrpack` containing one), the app
 uploads it as `multipart/form-data`, and renders the matched signatures
@@ -167,14 +167,20 @@ A match has four optional fields. Any combination can appear, all four can be nu
 
 ## Design rules
 
-- **Tauri commands.** Currently `scan_jar(path)`, `check_status()`, and `open_url(url)`. Add new commands sparingly; prefer extending an existing flow.
+- **Tauri commands.** Defined in `src-tauri/src/api.rs`, registered in
+  `src-tauri/src/lib.rs` (`invoke_handler` block). Today they cover
+  scanning (`scan_jar`, `cancel_scan`), service status (`check_status`,
+  `check_for_update`, `app_version`), URL opening (`open_url`), log
+  management (`open_log_dir`, `clear_logs`, `log_dir_size`), and local
+  history (`history_list`, `history_clear`, `history_delete`). Add new
+  commands sparingly; prefer extending an existing flow.
 - **Outbound HTTP must send `x-jlab-client: desktop`.** Both `scan_jar` and `check_status` set it. Any future request to `jlab.threat.rip` must do the same.
 - **Errors are typed, not strings.** Always extend `AppError` (with a new `#[serde(rename_all = "snake_case")]` variant) and the matching union in `src/lib/types.ts`. Never return raw `String` errors to the frontend. The `ErrorBanner` component switches on `kind`.
 - **The frontend doesn't talk HTTP.** All network traffic goes through Rust. CSP is restrictive (`connect-src ipc:` only). Adding `fetch()` calls in the React code will be blocked.
 - **React functional components with hooks only.** No class components. Use `useState`, `useReducer`, `useMemo`, `useEffect`, `useRef`, `useCallback`. The `react-jsx` runtime is on, so no `import React` is needed in `.tsx` files. Do not enable `<StrictMode>` in `main.tsx` (the Tauri drag-drop listener and the `RemoteStatus` polling are designed for single-registration; StrictMode's dev double-mount would duplicate them).
 - **State machine is the source of truth.** `App.tsx`'s `ScanState` discriminated union drives everything via `useReducer`. Don't add side-state for "scanning AND error simultaneously". Encode it as a new variant if needed.
 - **Tailwind v4, tokens in `src/index.css` `@theme`.** No `tailwind.config.js`, no `postcss.config.js`. Compose utility classes; use `var(--token)` only when bracket syntax preserves an exact value (animations, exact radii). Do not write per-component `<style>` blocks: React has no scoped CSS, and one-offs should land in `src/index.css` with a clearly-named class.
-- **Drag-drop must use the Tauri webview event.** `getCurrentWebview().onDragDropEvent()` is the only path that delivers native file paths on macOS and Windows. JSX `onDragOver`/`onDrop` will not work for native drops. Do not "simplify" the listener pattern in `DropZone.tsx`.
+- **Drag-drop must use the Tauri webview event.** `getCurrentWebview().onDragDropEvent()` is the only path that delivers native file paths on macOS, Windows, and Linux (webkit2gtk). JSX `onDragOver`/`onDrop` will not work for native drops. Do not "simplify" the listener pattern in `DropZone.tsx`.
 
 ## Performance
 
@@ -235,15 +241,20 @@ Past scans are persisted on the user's device, no network involved.
 ## CI
 
 - `.github/workflows/ci.yml` runs on every PR and on push to `dev`. Matrix
-  on macOS + Windows: `npm run check`, `cargo fmt --check`, `cargo clippy
-  -- -D warnings`, `cargo check`, plus a `tauri build --debug` smoke job
-  and a `gitleaks` scan.
+  on macOS, Windows, and `ubuntu-24.04`: `npm run check`, `cargo fmt
+  --check`, `cargo clippy -- -D warnings`, `cargo check`, plus a `tauri
+  build --debug` smoke job and a `gitleaks` scan. The Ubuntu jobs install
+  Tauri's apt prereqs (`libwebkit2gtk-4.1-dev`, `libssl-dev`,
+  `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`, `file`,
+  `libfuse2t64`).
 - `.github/workflows/release.yml` triggers on push to `main` and on
   `workflow_dispatch`. The version-gate job reads
   `src-tauri/tauri.conf.json`. If the version is new (no matching `v*`
-  tag), it builds macOS (`--target universal-apple-darwin`) and Windows,
-  attaches `.dmg`, `.msi`, `.exe`, and the signed updater manifest to a
-  GitHub Release, and tags `v<version>`.
+  tag), it builds macOS (`--target universal-apple-darwin`), Windows, and
+  Linux (`ubuntu-24.04`), attaches `.dmg`, `.msi`, `.exe`, `.deb`, `.rpm`,
+  and `.AppImage` to a GitHub Release, and tags `v<version>`. There is no
+  signed updater manifest today (`bundle.createUpdaterArtifacts` is
+  `false`); updates are manual via the Releases page.
 
 ## TODOs
 

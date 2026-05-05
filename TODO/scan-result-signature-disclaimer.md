@@ -15,8 +15,8 @@ not act on a single hit without thinking.
 
 ## Tasks
 
-- [ ] Decide placement: inside the file-metadata header in `SignatureList.tsx`, or as a row above the severity counts. Header row keeps it visible without pushing matches below the fold.
-- [ ] Add the line "Signature matches alone are not a final file verdict." with a soft info style (muted text + a small info icon, no severity color so it does not compete with the critical/high counts).
-- [ ] Show the disclaimer on every result, including the zero-match case where it matters most.
-- [ ] Honor `prefers-reduced-motion`: no animation on the icon. Reuse existing tokens from `src/index.css`, no per-component `<style>` block.
-- [ ] Run `npm run check` and eyeball in `npm run tauri dev` against a fixture with and without matches.
+- [x] Decide placement: inside the file-metadata header in `SignatureList.tsx`, or as a row above the severity counts. Header row keeps it visible without pushing matches below the fold.
+- [x] Add the line "Signature matches alone are not a final file verdict." with a soft info style (muted text + a small info icon, no severity color so it does not compete with the critical/high counts).
+- [x] Show the disclaimer on every result, including the zero-match case where it matters most.
+- [x] Honor `prefers-reduced-motion`: no animation on the icon. Reuse existing tokens from `src/index.css`, no per-component `<style>` block.
+- [~] Run `npm run check` and eyeball in `npm run tauri dev` against a fixture with and without matches.

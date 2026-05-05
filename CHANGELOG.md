@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-05
+
+### Added
+
+- Linux desktop bundles. Releases now publish `.deb` (Debian / Ubuntu), `.rpm` (Fedora / RHEL / openSUSE), and `.AppImage` (universal) artifacts alongside the existing macOS DMG and Windows MSI. CI builds on `ubuntu-24.04` against `webkit2gtk-4.1`. README install section gained a "First run on Linux" block. Track the upstream advisories listed in `TODO/linux-builds-deb-rpm-appimage.md` (`glib` 0.18.5 and `rand` 0.7.3) on every Tauri minor bump.
+- "Matches are not a verdict" disclaimer on the scan result view. The new `SignatureDisclaimer` component sits above the signature list and explains that signature hits indicate similarity to known patterns, not proof of malicious intent. Wording tuned to keep false positives in context without burying the result. (#5)
+- New `history_cap` Tauri command. The frontend now reads `HISTORY_CAP` from Rust on mount instead of duplicating the constant. `IdleDashboard` keeps `100` only as a placeholder while the IPC roundtrip is in flight. A tripwire test in `history.rs` reminds future maintainers to bump the docs if they change the cap. (#23, #34)
+
+### Changed
+
+- `RemoteStatus` pauses the 60-second `/api/stats` poll while the window is hidden and reruns the check on `visibilitychange`. Idle, hidden windows no longer heartbeat. README now names the recurring stats poll and the per-scan threat-intel fetch, and links to a new "Network surface" section in `SECURITY.md` that lists every outbound endpoint. (#17, #25)
+- `SECURITY.md` now spells out the full `open_url` allowlist (threat.rip family, `www.virustotal.com`, and any `github.com/<owner>/<repo>`) and points at `src-tauri/src/api.rs` as the source of truth. The GitHub clause was widened from a single hard-coded repo to any repo, matching the runtime behavior. (#20, #27, #33)
+- `CLAUDE.md` Tauri-commands section refreshed. The list now reflects all twelve registered commands (scan, status, updater, opener, log management, local history) and points at `api.rs` and `lib.rs` instead of trying to track command names inline. (#21, #26)
+- `Cargo.toml` and `package.json` now carry `repository`, `homepage`, and `readme` / `bugs` fields pointing at `github.com/NeikiDev/jlab-desktop`. `cargo metadata` and npm tooling no longer report empty repository strings. (#29, #32)
+
+### Fixed
+
+- `open_url` now accepts any `https://github.com/<owner>/<repo>` URL with optional sub-path, query, or fragment. The old hard-coded prefix only allowed `NeikiDev/jlab-desktop`, so the RatterScanner threat-intel card's "Visit" button on verified third-party projects was rejected with `AppError::Network` and silently swallowed by the frontend. The new check uses an `is_github_repo_url` helper that constrains owner / repo segments to `[A-Za-z0-9_.-]` and rejects empty / `..` / host-smuggling shapes. Two unit tests cover accepted and rejected URL shapes. (#28, #33)
+- Updater no longer hides a stable release from users running a prerelease that shares the same numeric core. `0.2.1-rc1` is now correctly told that `0.2.1` is available. The new `parse_version` returns `((major, minor, patch), Option<prerelease>)`, and `is_newer` ranks any release without a prerelease tag above any release with one on the same numeric core; newer cores always win regardless of prerelease state. Build metadata (`+...`) is still ignored, matching semver. Update notifications still only ever offer stable releases (`releases/latest` excludes prereleases by default). Seven new unit tests, including the explicit regression. (#18, #37)
+- Container archives (`.zip` / `.mcpack` / `.mrpack`) are now streamed straight into `zip::ZipArchive` from a `std::fs::File` inside `spawn_blocking`. `run_scan` previously called `tokio::fs::read` on the outer archive and handed the resulting `Vec<u8>` to `extract_largest_jar` via `Cursor`, which meant up to 50 MB of allocation per scan, with both the original and the moved copy alive during the IPC handoff. Plain `.jar` keeps the buffered path because those bytes are needed in memory anyway for SHA-256 and the multipart upload. New regression test opens a real on-disk zip via the streaming entry point. (#22, #35)
+- Scan-result header no longer renders `"undefined"` or `"null B"` when the API omits envelope fields. Every scan field now goes through the same `asStr` / `asNum` / `asBool` helpers already used for threat intel, with safe fallbacks (file name falls back to `"(unknown file)"`, counts to the local signature count, sizes to `0`). (#30, #31)
+
+### Security
+
+- Local scan history is no longer world-readable on Linux when the platform `app_data_dir` is unavailable. The fallback path used `/tmp/jlab-desktop`, which on a shared Linux box left history files at the process umask (often 644) so any local user could read scan file names, SHA-256s, and severity counts. The fallback now resolves to `<tempdir>/jlab-desktop-<sanitized-USER>` (sanitizer strips anything outside `[A-Za-z0-9_-]`, lowercases, caps at 32 chars, collapses empty input to `anon`), and on Unix `chmod 0o700` is applied to the directory after creation. Per-user (not per-PID) so degraded mode keeps history across launches. The platform `app_data_dir` is untouched because it already has the right ACL. New unit tests cover sanitizer edge cases (path traversal, separators, unicode, length cap, empty input). (#19, #36)
+- `open_url` now goes through `tauri-plugin-opener` instead of a per-OS `Command::new` branch (`open` / `cmd /C start` / `xdg-open`). `cmd.exe` applies its own metacharacter parsing on top of the CRT, so a URL with embedded quotes plus `&` could in theory chain commands. The current allowlist makes that unreachable today, but the platform call no longer depends on shell quoting at all. (#16, #24)
+
 ## [0.2.1] - 2026-05-04
 
 ### Changed
@@ -64,7 +91,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 The first public release. Initial macOS (universal) and Windows (MSI) builds.
 
-[Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.3.0
 [0.2.1]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.2.1
 [0.2.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.2.0
 [0.1.1]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.1.1

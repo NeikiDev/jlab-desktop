@@ -3,6 +3,7 @@ import type { ScanResult, Severity, Signature } from "../types";
 import SignatureCard from "./SignatureCard";
 import LazyMount from "./LazyMount";
 import FamilyAlert from "./FamilyAlert";
+import SignatureDisclaimer from "./SignatureDisclaimer";
 import ThirdPartyIntel from "./ThirdPartyIntel";
 import { cn } from "../cn";
 
@@ -213,6 +214,11 @@ export default function SignatureList({ result, onReset }: Props) {
           );
         })}
       </div>
+
+      {/* Caveat: a hit is not a verdict. Always render. */}
+      <SignatureDisclaimer
+        hasConfirmedFamily={result.confirmedFamilies.length > 0}
+      />
 
       {/* Signature groups. */}
       {result.signatures.length === 0 ? (

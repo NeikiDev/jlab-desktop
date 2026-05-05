@@ -27,8 +27,8 @@ assignees: []
 ## Environment
 
 - App version:
-- OS and version: (macOS 14.x / Windows 11 22H2 / etc.)
-- Installed from: (DMG / MSI / NSIS / built from source)
+- OS and version: (macOS 14.x / Windows 11 22H2 / Ubuntu 24.04 / Fedora 40 / etc.)
+- Installed from: (DMG / MSI / NSIS / .deb / .rpm / AppImage / built from source)
 - Auto-updater enabled: yes / no
 
 ## Additional context

@@ -182,3 +182,58 @@ jobs:
           releaseBody: ${{ needs.version.outputs.release_body }}
           releaseDraft: false
           prerelease: false
+
+  build-linux:
+    name: Build Linux (deb + rpm + AppImage)
+    needs: version
+    if: needs.version.outputs.should_release == 'true'
+    # Pin to 24.04 so the apt list below stays valid. Tauri 2 needs
+    # libwebkit2gtk-4.1 on 22.04 / 24.04; 25.04+ may have moved to 6.0.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: src-tauri
+
+      - name: Install Tauri Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            file \
+            libfuse2t64
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Build and upload (Linux)
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ needs.version.outputs.tag }}
+          releaseName: "JLab Desktop ${{ needs.version.outputs.tag }}"
+          releaseBody: ${{ needs.version.outputs.release_body }}
+          releaseDraft: false
+          prerelease: false

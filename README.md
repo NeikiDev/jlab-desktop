@@ -3,7 +3,7 @@
 [![License: MIT or Apache-2.0](https://img.shields.io/badge/license-MIT%20or%20Apache--2.0-blue.svg)](#license)
 [![Latest release](https://img.shields.io/github/v/release/NeikiDev/jlab-desktop?display_name=tag&sort=semver)](https://github.com/NeikiDev/jlab-desktop/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/NeikiDev/jlab-desktop/ci.yml?branch=main&label=ci)](https://github.com/NeikiDev/jlab-desktop/actions/workflows/ci.yml)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows-lightgrey)](#download)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](#download)
 
 Native desktop client for the public [JLab static JAR scanner](https://jlab.threat.rip). Drop a `.jar` (or a `.zip`, `.mcpack`, or `.mrpack` that contains one), the app uploads the file to the JLab API and shows the matched signatures grouped by severity. The HTTP upload runs in Rust, so no file bytes leak through the JavaScript layer.
 
@@ -19,7 +19,7 @@ Native desktop client for the public [JLab static JAR scanner](https://jlab.thre
 - Local size validation (50 MB) and zip-magic check before any network call.
 - Cancellable scans, phase-aware progress UI with a live event log.
 - Local scan history (last 100 scans, summary only). Stored on your device, never uploaded. File bytes and signature payloads are not persisted.
-- Small (well under 10 MB), starts fast, no telemetry, no auth.
+- Small (well under 10 MB), starts fast, no analytics, no auth. The header status indicator pings `jlab.threat.rip/api/stats` once on launch and then once a minute while the window is visible. Each scan also fetches `jlab.threat.rip/api/public/threat-intel/<sha256>` to enrich the report. See [SECURITY.md](SECURITY.md#network-surface) for the full list of outbound endpoints.
 
 ## Download
 
@@ -27,6 +27,9 @@ Pre-built installers are published on the GitHub Releases page on every push to 
 
 - macOS (universal, Apple Silicon and Intel): `JLab.Desktop_x.y.z_universal.dmg`
 - Windows (MSI): `JLab.Desktop_x.y.z_x64_en-US.msi`
+- Linux (Debian / Ubuntu): `JLab.Desktop_x.y.z_amd64.deb`
+- Linux (Fedora / RHEL / openSUSE): `JLab.Desktop-x.y.z-1.x86_64.rpm`
+- Linux (universal): `JLab.Desktop_x.y.z_amd64.AppImage`
 
 [Download the latest release](https://github.com/NeikiDev/jlab-desktop/releases/latest).
 
@@ -50,6 +53,39 @@ Signed builds will land in a later release.
 The current builds are not signed with a code-signing certificate. Windows SmartScreen will show "Windows protected your PC". Click `More info`, then `Run anyway`. Windows remembers the choice for that file.
 
 Signed builds will land in a later release.
+
+### First run on Linux
+
+The Linux bundles are built on Ubuntu 24.04 against `webkit2gtk-4.1` and target `x86_64`. Pick the format that matches your distro:
+
+- Debian / Ubuntu (and derivatives like Mint, Pop!\_OS):
+
+  ```bash
+  sudo apt install ./JLab.Desktop_x.y.z_amd64.deb
+  ```
+
+- Fedora / RHEL / openSUSE:
+
+  ```bash
+  sudo dnf install ./JLab.Desktop-x.y.z-1.x86_64.rpm
+  # or, on openSUSE:
+  sudo zypper install ./JLab.Desktop-x.y.z-1.x86_64.rpm
+  ```
+
+- Anything else (Arch, NixOS, immutable distros, etc.) via AppImage:
+
+  ```bash
+  chmod +x JLab.Desktop_x.y.z_amd64.AppImage
+  ./JLab.Desktop_x.y.z_amd64.AppImage
+  ```
+
+  AppImage needs FUSE on the host. On Ubuntu 24.04 install `libfuse2t64`; on older distros install `libfuse2`. On systems without FUSE you can extract and run instead:
+
+  ```bash
+  ./JLab.Desktop_x.y.z_amd64.AppImage --appimage-extract-and-run
+  ```
+
+The Linux builds are not signed. There is no Linux-equivalent of Gatekeeper or SmartScreen, so installs proceed normally, but verify the SHA-256 against the GitHub Release page if you want a signature-style check.
 
 ## Updates
 
