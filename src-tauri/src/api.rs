@@ -885,6 +885,11 @@ pub fn open_url(url: String) -> Result<(), AppError> {
     Ok(())
 }
 
+// `releases/latest` excludes prereleases by default, so update notifications
+// only ever offer stable releases. A user on `0.2.1-rc1` is offered `0.2.1`
+// stable, never a hypothetical `0.2.2-rc1`. If we ever want to surface newer
+// prereleases to users already on a prerelease, switch to
+// `releases?per_page=10` and pick the highest tag the comparator allows.
 const RELEASES_API: &str = "https://api.github.com/repos/NeikiDev/jlab-desktop/releases/latest";
 const RELEASES_PAGE: &str = "https://github.com/NeikiDev/jlab-desktop/releases/latest";
 
@@ -907,14 +912,58 @@ pub struct UpdateInfo {
     pub release_url: String,
 }
 
-fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
+/// Parse a version string into `(major, minor, patch)` plus an optional
+/// prerelease tag. Build metadata (`+...`) is ignored, matching semver.
+///
+/// We deliberately keep the prerelease as a string and compare it
+/// lexicographically. That's not full semver precedence, but it is enough
+/// for the shapes this project uses (`-rc1`, `-beta.2`, `-alpha`) and avoids
+/// pulling in the `semver` crate for one comparison site.
+fn parse_version(s: &str) -> Option<((u64, u64, u64), Option<String>)> {
     let s = s.trim_start_matches('v').trim();
-    let core = s.split(['-', '+']).next()?;
+    let (core, pre) = match s.split_once('-') {
+        Some((c, rest)) => {
+            let pre = rest.split('+').next().unwrap_or("");
+            (
+                c,
+                if pre.is_empty() {
+                    None
+                } else {
+                    Some(pre.to_string())
+                },
+            )
+        }
+        None => (s.split('+').next().unwrap_or(s), None),
+    };
     let mut parts = core.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next().unwrap_or("0").parse().ok()?;
     let patch = parts.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor, patch))
+    Some(((major, minor, patch), pre))
+}
+
+/// Returns true when `latest` is strictly newer than `current`.
+///
+/// Semver rule we care about: a release without a prerelease tag ranks above
+/// any release with one that shares the same numeric core. So `0.2.1` beats
+/// `0.2.1-rc1`, but `0.2.1-rc1` does not beat `0.2.1`. Two prereleases on
+/// the same core are compared lexicographically.
+fn is_newer(current: &str, latest: &str) -> bool {
+    let Some((c_core, c_pre)) = parse_version(current) else {
+        return false;
+    };
+    let Some((l_core, l_pre)) = parse_version(latest) else {
+        return false;
+    };
+    if l_core != c_core {
+        return l_core > c_core;
+    }
+    match (c_pre.as_deref(), l_pre.as_deref()) {
+        (None, None) => false,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (Some(c), Some(l)) => l > c,
+    }
 }
 
 #[tauri::command]
@@ -953,13 +1002,10 @@ pub async fn check_for_update(http: State<'_, HttpClient>) -> Result<UpdateInfo,
         .to_string();
     let latest = if tag.is_empty() { None } else { Some(tag) };
 
-    let available = match (
-        parse_semver(&current),
-        latest.as_deref().and_then(parse_semver),
-    ) {
-        (Some(c), Some(l)) => l > c,
-        _ => false,
-    };
+    let available = latest
+        .as_deref()
+        .map(|l| is_newer(&current, l))
+        .unwrap_or(false);
 
     Ok(UpdateInfo {
         current_version: current,
@@ -1123,5 +1169,67 @@ mod tests {
         assert_eq!(extracted, payload_big);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_version_keeps_prerelease_and_drops_build() {
+        assert_eq!(parse_version("0.2.1"), Some(((0, 2, 1), None)));
+        assert_eq!(parse_version("v0.2.1"), Some(((0, 2, 1), None)));
+        assert_eq!(
+            parse_version("0.2.1-rc1"),
+            Some(((0, 2, 1), Some("rc1".into())))
+        );
+        assert_eq!(
+            parse_version("0.2.1-beta.2"),
+            Some(((0, 2, 1), Some("beta.2".into())))
+        );
+        // Build metadata is ignored on both sides.
+        assert_eq!(parse_version("0.2.1+commit.abc"), Some(((0, 2, 1), None)));
+        assert_eq!(
+            parse_version("0.2.1-rc1+commit.abc"),
+            Some(((0, 2, 1), Some("rc1".into())))
+        );
+        assert_eq!(parse_version("garbage"), None);
+    }
+
+    // Issue #18 regression: a user on a prerelease should be told about the
+    // matching stable release.
+    #[test]
+    fn rc_user_sees_stable_release() {
+        assert!(is_newer("0.2.1-rc1", "0.2.1"));
+        assert!(is_newer("v0.2.1-rc1", "v0.2.1"));
+    }
+
+    #[test]
+    fn stable_user_does_not_get_offered_prerelease_with_same_core() {
+        assert!(!is_newer("0.2.1", "0.2.1-rc1"));
+    }
+
+    #[test]
+    fn newer_core_always_wins_regardless_of_prerelease() {
+        assert!(is_newer("0.2.1", "0.2.2"));
+        assert!(is_newer("0.2.1", "0.2.2-rc1"));
+        assert!(is_newer("0.2.1-rc9", "0.2.2-rc1"));
+        assert!(!is_newer("0.2.2", "0.2.1"));
+    }
+
+    #[test]
+    fn equal_versions_are_not_newer() {
+        assert!(!is_newer("0.2.1", "0.2.1"));
+        assert!(!is_newer("0.2.1-rc1", "0.2.1-rc1"));
+    }
+
+    #[test]
+    fn two_prereleases_compared_lexicographically() {
+        assert!(is_newer("0.2.1-rc1", "0.2.1-rc2"));
+        assert!(!is_newer("0.2.1-rc2", "0.2.1-rc1"));
+        // alpha < beta < rc lexicographically, which is what we want here.
+        assert!(is_newer("0.2.1-alpha", "0.2.1-beta"));
+    }
+
+    #[test]
+    fn unparseable_input_is_treated_as_no_update() {
+        assert!(!is_newer("garbage", "0.2.1"));
+        assert!(!is_newer("0.2.1", "garbage"));
     }
 }
