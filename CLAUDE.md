@@ -167,7 +167,13 @@ A match has four optional fields. Any combination can appear, all four can be nu
 
 ## Design rules
 
-- **Tauri commands.** Currently `scan_jar(path)`, `check_status()`, and `open_url(url)`. Add new commands sparingly; prefer extending an existing flow.
+- **Tauri commands.** Defined in `src-tauri/src/api.rs`, registered in
+  `src-tauri/src/lib.rs` (`invoke_handler` block). Today they cover
+  scanning (`scan_jar`, `cancel_scan`), service status (`check_status`,
+  `check_for_update`, `app_version`), URL opening (`open_url`), log
+  management (`open_log_dir`, `clear_logs`, `log_dir_size`), and local
+  history (`history_list`, `history_clear`, `history_delete`). Add new
+  commands sparingly; prefer extending an existing flow.
 - **Outbound HTTP must send `x-jlab-client: desktop`.** Both `scan_jar` and `check_status` set it. Any future request to `jlab.threat.rip` must do the same.
 - **Errors are typed, not strings.** Always extend `AppError` (with a new `#[serde(rename_all = "snake_case")]` variant) and the matching union in `src/lib/types.ts`. Never return raw `String` errors to the frontend. The `ErrorBanner` component switches on `kind`.
 - **The frontend doesn't talk HTTP.** All network traffic goes through Rust. CSP is restrictive (`connect-src ipc:` only). Adding `fetch()` calls in the React code will be blocked.
