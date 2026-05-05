@@ -86,6 +86,7 @@ pub fn run() {
             api::history_list,
             api::history_clear,
             api::history_delete,
+            api::history_cap,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

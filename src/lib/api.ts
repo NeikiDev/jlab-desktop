@@ -387,6 +387,10 @@ export async function historyDelete(id: string): Promise<void> {
   await invoke<void>("history_delete", { id });
 }
 
+export async function historyCap(): Promise<number> {
+  return await invoke<number>("history_cap");
+}
+
 export const SCAN_PHASE_EVENT = "scan://phase";
 
 type PhaseHandler = (event: ScanPhaseEvent) => void;

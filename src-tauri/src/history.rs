@@ -300,6 +300,18 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
 mod tests {
     use super::*;
 
+    // Tripwire: README.md and CLAUDE.md both name the cap as "100". If you
+    // change HISTORY_CAP, update those docs in the same PR. The runtime UI
+    // reads the cap via the `history_cap` IPC command, so the dashboard
+    // label follows the constant automatically; only the docs need a touch.
+    #[test]
+    fn history_cap_is_documented_value() {
+        assert_eq!(
+            HISTORY_CAP, 100,
+            "HISTORY_CAP changed: update README.md and CLAUDE.md to match"
+        );
+    }
+
     #[test]
     fn iso_format_basic() {
         // 2024-01-02T03:04:05.006Z (=> 1704164645 seconds since epoch)
