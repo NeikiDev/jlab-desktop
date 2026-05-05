@@ -80,6 +80,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(log_plugin)
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(api::ScanJobs::default())
         .manage(api::HttpClient(http))
         .setup(|app| {
