@@ -182,16 +182,16 @@ fn has_zip_magic(bytes: &[u8]) -> bool {
 // pick the largest inner .jar by uncompressed size and scan that one. The
 // largest is almost always the actual mod / payload, while the rest are
 // libraries already covered by their own signatures.
-fn extract_largest_jar(container_bytes: Vec<u8>) -> Result<(Vec<u8>, String, usize), AppError> {
-    extract_largest_jar_capped(container_bytes, MAX_BYTES)
-}
-
-fn extract_largest_jar_capped(
-    container_bytes: Vec<u8>,
+//
+// Generic over `R: Read + Seek` so callers can hand in either a
+// `std::fs::File` (the production path, no full-archive buffering) or a
+// `Cursor<Vec<u8>>` (tests). `zip::ZipArchive` only needs `Read + Seek`,
+// not a contiguous slice in memory.
+fn extract_largest_jar_from_reader<R: std::io::Read + std::io::Seek>(
+    reader: R,
     max_bytes: u64,
 ) -> Result<(Vec<u8>, String, usize), AppError> {
-    let cursor = std::io::Cursor::new(container_bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::InvalidArchive {
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| AppError::InvalidArchive {
         message: format!("could not open archive: {e}"),
     })?;
 
@@ -382,30 +382,37 @@ async fn run_scan(
 
     emit_phase(app, started, "read", "running", None);
     let read_started = Instant::now();
-    let raw_bytes = tokio::select! {
-        biased;
-        _ = cancel.notified() => return Err(AppError::Cancelled),
-        res = tokio::fs::read(p) => res?,
-    };
-    log::debug!(
-        "read {} bytes from disk in {}ms fingerprint={}",
-        raw_bytes.len(),
-        read_started.elapsed().as_millis(),
-        fingerprint(&raw_bytes)
-    );
-
-    if !has_zip_magic(&raw_bytes) {
-        return Err(AppError::UnsupportedFile {
-            extension: ext.clone(),
-            allowed: allowed_exts(),
-        });
-    }
 
     let (bytes, upload_name) = if is_container {
+        // Stream the outer archive: open it inside the blocking task and
+        // hand the file handle straight to `zip::ZipArchive`. Avoids a
+        // 50 MB `Vec<u8>` allocation per scan that the previous
+        // `tokio::fs::read` -> `Cursor` path required (see issue #22 and the
+        // CLAUDE.md note in the "Performance" section).
+        let path_owned = path.clone();
+        let ext_for_err = ext.clone();
         let (extracted, inner_name, jar_count) = tokio::select! {
             biased;
             _ = cancel.notified() => return Err(AppError::Cancelled),
-            res = tokio::task::spawn_blocking(move || extract_largest_jar(raw_bytes)) => {
+            res = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, String, usize), AppError> {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut f = std::fs::File::open(&path_owned)
+                    .map_err(|e| AppError::Io { message: e.to_string() })?;
+                // Renamed text files (e.g. someone dropping `notes.txt` as
+                // `pack.zip`) get the same UnsupportedFile error the buffered
+                // path produced. Done inside the blocking task so we don't need
+                // a separate async pre-read.
+                let mut header = [0u8; 4];
+                if f.read_exact(&mut header).is_err() || !has_zip_magic(&header) {
+                    return Err(AppError::UnsupportedFile {
+                        extension: ext_for_err,
+                        allowed: allowed_exts(),
+                    });
+                }
+                f.seek(SeekFrom::Start(0))
+                    .map_err(|e| AppError::Io { message: e.to_string() })?;
+                extract_largest_jar_from_reader(f, MAX_BYTES)
+            }) => {
                 res.map_err(|e| AppError::Io { message: format!("extract task: {e}") })??
             },
         };
@@ -427,6 +434,25 @@ async fn run_scan(
         );
         (extracted, inner_name)
     } else {
+        // Plain `.jar`: we still need the bytes in memory to compute sha256
+        // and build the multipart upload, so the buffered read stays.
+        let raw_bytes = tokio::select! {
+            biased;
+            _ = cancel.notified() => return Err(AppError::Cancelled),
+            res = tokio::fs::read(p) => res?,
+        };
+        log::debug!(
+            "read {} bytes from disk in {}ms fingerprint={}",
+            raw_bytes.len(),
+            read_started.elapsed().as_millis(),
+            fingerprint(&raw_bytes)
+        );
+        if !has_zip_magic(&raw_bytes) {
+            return Err(AppError::UnsupportedFile {
+                extension: ext.clone(),
+                allowed: allowed_exts(),
+            });
+        }
         emit_phase(
             app,
             started,
@@ -1040,7 +1066,7 @@ mod tests {
         bytes[cd_off + 24..cd_off + 28].copy_from_slice(&lie.to_le_bytes());
 
         let max_bytes: u64 = 1024;
-        let result = extract_largest_jar_capped(bytes, max_bytes);
+        let result = extract_largest_jar_from_reader(Cursor::new(bytes), max_bytes);
 
         match result {
             Err(AppError::TooLarge { max_mb }) => {
@@ -1048,5 +1074,49 @@ mod tests {
             }
             other => panic!("expected TooLarge, got {other:?}"),
         }
+    }
+
+    // Locks in the streaming path: build a real outer zip on disk, hand the
+    // file handle (not a pre-buffered Vec) to extract_largest_jar_from_reader,
+    // and confirm the inner jar bytes round-trip.
+    #[test]
+    fn extracts_largest_jar_from_file_handle() {
+        let payload_small = b"PK\x03\x04small jar bytes".to_vec();
+        let payload_big = b"PK\x03\x04this is the bigger jar".to_vec();
+
+        let mut bytes: Vec<u8> = Vec::new();
+        {
+            let mut zip = ZipWriter::new(Cursor::new(&mut bytes));
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zip.start_file("libs/small.jar", opts).unwrap();
+            zip.write_all(&payload_small).unwrap();
+            zip.start_file("payload/big.jar", opts).unwrap();
+            zip.write_all(&payload_big).unwrap();
+            zip.start_file("readme.txt", opts).unwrap();
+            zip.write_all(b"not a jar").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "jlab-stream-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("outer.zip");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let f = std::fs::File::open(&path).unwrap();
+        let (extracted, inner_name, jar_count) =
+            extract_largest_jar_from_reader(f, 64 * 1024).unwrap();
+
+        assert_eq!(jar_count, 2);
+        assert_eq!(inner_name, "big.jar");
+        assert_eq!(extracted, payload_big);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
