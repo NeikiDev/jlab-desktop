@@ -20,3 +20,10 @@ Ship Linux desktop bundles alongside macOS and Windows. Cover the most common GU
 
 ## Notes
 - A repo scan flagged the existing `if: matrix.os == 'ubuntu-latest'` step in the `lint` job as dead config (the matrix is `[macos-14, windows-latest]`). Resolving this TODO activates the step instead of removing it, which is the cleaner outcome. Mention this in the PR description so the next reviewer does not also try to delete it.
+
+## Known upstream advisories on Linux
+
+When the Linux target ships, two open Rust advisories will apply to that build. Both are already dismissed in Dependabot as `tolerable_risk` (alerts #1 and #2 on this repo). Re-check on every Tauri minor bump; if a Tauri release lands the gtk4-rs migration before Linux ships, drop this section.
+
+- `glib` 0.18.5 (GHSA-wrw7-89jp-8q8g, medium). Linux-only path via `tauri 2.11 -> wry 0.55 -> webkit2gtk -> gtk 0.18 -> glib 0.18`. Unsoundness in `VariantStrIter`. Failure mode is UB / NULL-pointer deref, not RCE. Tauri declined to backport to the gtk3 stack (`tauri-apps/tauri#12048`, closed `NOT_PLANNED`); the real fix is the gtk4-rs / webkit6 migration tracked in `wry#1474` and `tauri#7335`, `#12561`, `#12562`, `#12563`. `cargo update -p 'glib@0.18.5'` is a no-op because parents pin gtk 0.18.
+- `rand` 0.7.3 (GHSA-cq8v-f236-94qc, low). Build-time only, via `tauri-utils -> kuchikiki -> selectors -> phf_codegen 0.8 -> phf_generator 0.8 -> rand 0.7.3`. Hard-pinned by `phf_generator 0.8` (`rand = "0.7"`); `cargo update -p 'rand@0.7.3'` is a no-op. Unsoundness needs a custom `log` logger calling `rand::rng()` while `ThreadRng` reseeds, which cannot trigger inside `phf` codegen. Fix requires `tauri-utils` to drop `kuchikiki` or move to `phf 0.11+` upstream.
