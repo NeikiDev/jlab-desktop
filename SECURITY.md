@@ -89,8 +89,11 @@ For context, here is what the client does to limit blast radius:
   against zip bombs.
 - The client only opens URLs that match a small allowlist: `threat.rip`,
   `www.threat.rip`, `jlab.threat.rip`, `www.virustotal.com` (third-party
-  intel `View` links), and the project's own GitHub repo
-  (`github.com/NeikiDev/jlab-desktop/`, used by the footer and updater).
-  The full check lives in `open_url` in `src-tauri/src/api.rs`.
+  intel `View` links), and any `github.com/<owner>/<repo>` URL. GitHub
+  repos are accepted broadly because RatterScanner verified-source links
+  point at third-party projects, but the host is checked exactly so
+  lookalikes like `github.com.attacker.example` are rejected. The full
+  check lives in `open_url` (and `is_github_repo_url`) in
+  `src-tauri/src/api.rs`.
 - The Tauri capability set grants only what the UI uses (dialog, log,
   window, internal devtools toggle).
