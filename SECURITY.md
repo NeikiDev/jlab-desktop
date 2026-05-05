@@ -87,6 +87,10 @@ For context, here is what the client does to limit blast radius:
 - File size and zip-magic are validated before any network call.
 - Inner-jar size is checked against 50 MB before extraction, which guards
   against zip bombs.
-- The client only opens URLs on a small allowlist of `threat.rip` hosts.
+- The client only opens URLs that match a small allowlist: `threat.rip`,
+  `www.threat.rip`, `jlab.threat.rip`, `www.virustotal.com` (third-party
+  intel `View` links), and the project's own GitHub repo
+  (`github.com/NeikiDev/jlab-desktop/`, used by the footer and updater).
+  The full check lives in `open_url` in `src-tauri/src/api.rs`.
 - The Tauri capability set grants only what the UI uses (dialog, log,
   window, internal devtools toggle).
