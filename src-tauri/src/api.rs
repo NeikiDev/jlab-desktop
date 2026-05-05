@@ -855,13 +855,36 @@ pub async fn history_delete(store: State<'_, HistoryStore>, id: String) -> Resul
     history::delete(s, id).await
 }
 
+/// Accepts any `https://github.com/<owner>/<repo>` URL (with optional sub-path,
+/// query, or fragment). Used so RatterScanner verified-source links to
+/// third-party repos open in the browser, while still rejecting things like
+/// `https://github.com.attacker.example/`.
+fn is_github_repo_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://github.com/") else {
+        return false;
+    };
+    // Stop the path at the first `?` or `#`, then split into segments.
+    let path = rest.split(['?', '#']).next().unwrap_or("");
+    let mut segments = path.split('/');
+    let owner = segments.next().unwrap_or("");
+    let repo = segments.next().unwrap_or("");
+    let valid_segment = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    };
+    valid_segment(owner) && valid_segment(repo)
+}
+
 #[tauri::command]
 pub fn open_url(app: AppHandle, url: String) -> Result<(), AppError> {
     let allowed = url.starts_with("https://www.threat.rip/")
         || url.starts_with("https://threat.rip/")
         || url.starts_with("https://jlab.threat.rip/")
         || url.starts_with("https://www.virustotal.com/")
-        || url.starts_with("https://github.com/NeikiDev/jlab-desktop/");
+        || is_github_repo_url(&url);
     if !allowed {
         return Err(AppError::Network {
             message: "url not allowed".into(),
@@ -1222,5 +1245,45 @@ mod tests {
     fn unparseable_input_is_treated_as_no_update() {
         assert!(!is_newer("garbage", "0.2.1"));
         assert!(!is_newer("0.2.1", "garbage"));
+    }
+
+    #[test]
+    fn github_repo_url_accepts_third_party_repos() {
+        assert!(is_github_repo_url(
+            "https://github.com/some-owner/some-repo"
+        ));
+        assert!(is_github_repo_url(
+            "https://github.com/NeikiDev/jlab-desktop/"
+        ));
+        assert!(is_github_repo_url(
+            "https://github.com/NeikiDev/jlab-desktop/releases/latest"
+        ));
+        assert!(is_github_repo_url(
+            "https://github.com/owner/repo?tab=readme"
+        ));
+        assert!(is_github_repo_url("https://github.com/a/b#frag"));
+        assert!(is_github_repo_url("https://github.com/o.w-n_er/repo.name"));
+    }
+
+    #[test]
+    fn github_repo_url_rejects_lookalikes_and_garbage() {
+        // host smuggling
+        assert!(!is_github_repo_url(
+            "https://github.com.attacker.example/owner/repo"
+        ));
+        assert!(!is_github_repo_url(
+            "https://attacker.example/github.com/owner/repo"
+        ));
+        // wrong scheme
+        assert!(!is_github_repo_url("http://github.com/owner/repo"));
+        // missing repo segment
+        assert!(!is_github_repo_url("https://github.com/owner"));
+        assert!(!is_github_repo_url("https://github.com/owner/"));
+        assert!(!is_github_repo_url("https://github.com/"));
+        // path traversal-ish
+        assert!(!is_github_repo_url("https://github.com/../repo"));
+        assert!(!is_github_repo_url("https://github.com/owner/.."));
+        // disallowed chars
+        assert!(!is_github_repo_url("https://github.com/own er/repo"));
     }
 }
