@@ -1,6 +1,12 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Process-local sequence appended to every history entry id so two scans
+/// of the same file completed in the same millisecond produce different ids.
+/// See issue #44: without this, `history_delete` would remove all matches.
+static ENTRY_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use serde::{Deserialize, Serialize};
 
@@ -105,7 +111,12 @@ pub async fn delete(store: HistoryStore, id: String) -> Result<(), AppError> {
     spawn_blocking_history(move || {
         let _g = store.inner.lock.lock();
         let mut file = read_or_default(&store.file_path());
+        let before = file.entries.len();
         file.entries.retain(|e| e.id != id);
+        let removed = before - file.entries.len();
+        if removed > 1 {
+            log::warn!("history delete removed {removed} rows for id {id}; expected 1");
+        }
         file.version = SCHEMA_VERSION;
         ensure_dir(&store)?;
         write_atomic(&store, &file)
@@ -261,7 +272,11 @@ pub fn build_entry(
         .unwrap_or_default();
     let scanned_at_ms = now.as_millis() as u64;
     let scanned_at = iso8601_utc(now.as_secs() as i64, now.subsec_millis());
-    let id = format!("{scanned_at_ms}-{}", sha256.get(..8).unwrap_or(sha256));
+    let seq = ENTRY_SEQ.fetch_add(1, Ordering::Relaxed);
+    let id = format!(
+        "{scanned_at_ms}-{seq:x}-{}",
+        sha256.get(..8).unwrap_or(sha256)
+    );
 
     HistoryEntry {
         id,
@@ -365,6 +380,17 @@ mod tests {
         assert_eq!(e.top_severity, "critical");
         assert_eq!(e.sha256, "abcdef0123456789");
         assert!(e.id.ends_with("-abcdef01"));
+    }
+
+    // Regression: two scans of the same file in the same millisecond must
+    // not collide. Without the per-process sequence appended to the id,
+    // `history_delete` would remove both rows on a single delete click.
+    #[test]
+    fn build_entry_id_unique_for_same_ms_same_file() {
+        let scan = serde_json::json!({ "signatures": [] });
+        let a = build_entry(&scan, "x.jar", 0, "abcdef0123456789");
+        let b = build_entry(&scan, "x.jar", 0, "abcdef0123456789");
+        assert_ne!(a.id, b.id, "ids must differ even on same-ms same-file");
     }
 
     #[test]
