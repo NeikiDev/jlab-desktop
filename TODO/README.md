@@ -14,3 +14,4 @@ Managed by `/todo`.
 | 3   | [integrity-check-build-sha256-vs-github-release.md](integrity-check-build-sha256-vs-github-release.md)   | Other    | High     | M      | [ ]    |
 | 4   | [watched-folders-auto-scan-native-alerts.md](watched-folders-auto-scan-native-alerts.md)                 | Backend  | Medium   | L      | [ ]    |
 | 5   | [scan-result-signature-disclaimer.md](scan-result-signature-disclaimer.md)                               | Frontend | Medium   | S      | [~]    |
+| 6   | [update-api-and-conditional-warning-box.md](update-api-and-conditional-warning-box.md)                   | Other    | Medium   | S-M    | [ ]    |
