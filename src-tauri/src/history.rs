@@ -198,6 +198,20 @@ fn write_atomic(store: &HistoryStore, contents: &HistoryFile) -> Result<(), AppE
     std::fs::rename(&tmp, &final_path).map_err(|e| AppError::HistoryIo {
         message: format!("rename: {e}"),
     })?;
+    // Belt-and-braces on Unix: even if the data dir was created earlier
+    // under a wider mode (e.g. 0o755 inherited from the home dir on
+    // Fedora/openSUSE), the file itself stays 0o600 so other local users
+    // cannot read scan filenames and SHA-256s. The dir is also chmodded to
+    // 0o700 on startup; this is the per-file safety net. (#19, #39)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o600))
+        {
+            log::warn!("could not chmod 0600 history.json: {e}");
+        }
+    }
     Ok(())
 }
 

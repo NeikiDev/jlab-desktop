@@ -105,24 +105,31 @@ pub fn run() {
                         "app_data_dir unavailable; using fallback {}",
                         api::redact_path(&data_dir.to_string_lossy())
                     );
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        if let Err(e) = std::fs::set_permissions(
-                            &data_dir,
-                            std::fs::Permissions::from_mode(0o700),
-                        ) {
-                            log::warn!(
-                                "could not chmod 0700 fallback data dir {}: {e}",
-                                api::redact_path(&data_dir.to_string_lossy())
-                            );
-                        }
-                    }
                 } else {
                     log::info!(
                         "app data dir: {}",
                         api::redact_path(&data_dir.to_string_lossy())
                     );
+                }
+                // Lock the data dir to 0o700 on Unix on every path. The
+                // platform `app_data_dir` (e.g. `~/.local/share/JLAB-Desktop`)
+                // inherits the home-directory mode, which on Fedora and
+                // openSUSE defaults to 0o755, so without this the scan
+                // history (file names + SHA-256s) would be readable by
+                // other local users. macOS uses 0o700 on the home dir and
+                // Windows uses per-user ACLs, so this is a no-op there but
+                // never hurts. (#19, #39)
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Err(e) =
+                        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))
+                    {
+                        log::warn!(
+                            "could not chmod 0700 data dir {}: {e}",
+                            api::redact_path(&data_dir.to_string_lossy())
+                        );
+                    }
                 }
             }
             app.manage(history::HistoryStore::new(data_dir));
