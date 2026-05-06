@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -10,6 +10,20 @@ use tokio::sync::Notify;
 
 use crate::error::AppError;
 use crate::history::{self, HistoryStore};
+use crate::paths;
+
+/// Resolve the log directory the app actually writes to. Mirrors the choice
+/// `lib.rs::run` makes when configuring the log plugin: prefer the friendly
+/// folder (`<base>/JLab[/logs]`), fall back to Tauri's `app_log_dir()` if
+/// the platform resolver is unavailable.
+fn resolve_log_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    if let Some(p) = paths::friendly_log_dir() {
+        return Ok(p);
+    }
+    app.path().app_log_dir().map_err(|e| AppError::Io {
+        message: format!("resolve log dir: {e}"),
+    })
+}
 
 /// Replace the user's home directory prefix with `~` so log lines don't leak
 /// the system username. Operates on display strings only.
@@ -738,9 +752,7 @@ fn read_log_dir_total(dir: &Path) -> std::io::Result<u64> {
 
 #[tauri::command]
 pub fn log_dir_size(app: AppHandle) -> Result<u64, AppError> {
-    let dir = app.path().app_log_dir().map_err(|e| AppError::Io {
-        message: format!("resolve log dir: {e}"),
-    })?;
+    let dir = resolve_log_dir(&app)?;
     if !dir.exists() {
         return Ok(0);
     }
@@ -768,9 +780,7 @@ pub fn log_dir_size(app: AppHandle) -> Result<u64, AppError> {
 /// Returns the number of bytes freed so the UI can show the result.
 #[tauri::command]
 pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
-    let dir = app.path().app_log_dir().map_err(|e| AppError::Io {
-        message: format!("resolve log dir: {e}"),
-    })?;
+    let dir = resolve_log_dir(&app)?;
     if !dir.exists() {
         return Ok(0);
     }
@@ -836,9 +846,7 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
 
 #[tauri::command]
 pub fn open_log_dir(app: AppHandle) -> Result<(), AppError> {
-    let dir = app.path().app_log_dir().map_err(|e| AppError::Io {
-        message: format!("resolve log dir: {e}"),
-    })?;
+    let dir = resolve_log_dir(&app)?;
     if !dir.exists() {
         std::fs::create_dir_all(&dir).map_err(|e| AppError::Io {
             message: format!("create log dir: {e}"),

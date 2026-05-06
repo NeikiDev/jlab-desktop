@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- User-visible data and log folders are now `JLab`, not the bundle identifier. Without this, the `0.3.0 → 0.4.x` switch from the `JLAB-Desktop` identifier to the reverse-DNS `rip.threat.jlab-desktop` (issue #46) would have created a `rip.threat.jlab-desktop/` folder under `Application Support`, `AppData`, or `.local/share`. New paths: `~/Library/Application Support/JLab/` (macOS), `%APPDATA%\JLab\` (Windows), `$XDG_DATA_HOME/JLab/` or `~/.local/share/JLab/` (Linux). Logs follow the same shape (`~/Library/Logs/JLab/` on macOS, `%LOCALAPPDATA%\JLab\logs\` on Windows, `<data>/JLab/logs/` on Linux). All resolution lives in the new `paths` module so future identifier changes never touch user folders again. (#46)
+- `history.json` and `debug*.log` files are migrated one-shot from the legacy `JLAB-Desktop` folder on first launch of the new build. Migration is idempotent, never overwrites an existing target file, and never blocks startup if it fails. The legacy folder is left in place for one release as a rollback hatch. (#46)
+
+### Migration (Windows)
+
+- The Wix `upgradeCode` is now pinned (`2E5324F3-603E-4837-9E6D-724525410B27`) so future MSI bumps upgrade the existing install in place. The first MSI built from this release will not match the auto-generated `upgradeCode` from `0.3.0`, so users upgrading from `0.3.0` may see the new build install side-by-side with the old one in `Apps & features`. The legacy entry can be uninstalled safely; `history.json` and `debug*.log` files are migrated automatically.
+
 ## [0.3.0] - 2026-05-05
 
 ### Added
