@@ -117,7 +117,6 @@ pub async fn delete(store: HistoryStore, id: String) -> Result<(), AppError> {
         if removed > 1 {
             log::warn!("history delete removed {removed} rows for id {id}; expected 1");
         }
-        file.version = SCHEMA_VERSION;
         ensure_dir(&store)?;
         write_atomic(&store, &file)
     })
@@ -150,7 +149,6 @@ fn append_blocking(store: &HistoryStore, entry: HistoryEntry) -> Result<(), AppE
     let _g = store.inner.lock.lock();
     ensure_dir(store)?;
     let mut file = read_or_default(&store.file_path());
-    file.version = SCHEMA_VERSION;
     file.entries.push(entry);
     if file.entries.len() > HISTORY_CAP {
         let drop_count = file.entries.len() - HISTORY_CAP;
@@ -178,8 +176,30 @@ fn read_or_default(path: &Path) -> HistoryFile {
         Ok(b) => b,
         Err(_) => return HistoryFile::default(),
     };
-    match serde_json::from_slice(&bytes) {
-        Ok(file) => file,
+    match serde_json::from_slice::<HistoryFile>(&bytes) {
+        Ok(file) if file.version <= SCHEMA_VERSION => file,
+        Ok(file) => {
+            // A newer build wrote this file. If we deserialize it and append,
+            // we silently strip any v(N+1) fields and write back as v1, which
+            // is the "old version trampling new version" footgun. Treat it
+            // the same as a corrupt file: move aside, start empty.
+            let bak = path.with_extension("json.future");
+            if let Err(rename_err) = std::fs::rename(path, &bak) {
+                log::warn!(
+                    "history.json schema v{} is newer than this build's v{SCHEMA_VERSION}; \
+                     could not move aside ({rename_err}), starting empty",
+                    file.version
+                );
+            } else {
+                log::warn!(
+                    "history.json schema v{} is newer than this build's v{SCHEMA_VERSION}; \
+                     moved to {} and starting empty",
+                    file.version,
+                    bak.display()
+                );
+            }
+            HistoryFile::default()
+        }
         Err(e) => {
             let bak = path.with_extension("json.corrupt");
             if let Err(rename_err) = std::fs::rename(path, &bak) {
@@ -399,6 +419,37 @@ mod tests {
         let e = build_entry(&scan, "x.jar", 0, "00");
         assert_eq!(e.signature_count, 0);
         assert_eq!(e.top_severity, "info");
+    }
+
+    #[test]
+    fn future_history_is_moved_aside() {
+        let dir = std::env::temp_dir().join(format!(
+            "jlab-history-future-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        let bak = dir.join("history.json.future");
+
+        // A v999 file with one entry. Older build must not trample it.
+        let body = br#"{"version":999,"entries":[{"id":"x","scannedAt":"2026-01-01T00:00:00.000Z","fileName":"f.jar","fileSizeBytes":1,"sha256":"00","severityCounts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"topSeverity":"info","signatureCount":0}]}"#;
+        std::fs::write(&path, body).unwrap();
+
+        let file = read_or_default(&path);
+        assert!(
+            file.entries.is_empty(),
+            "expected empty default when on-disk schema is newer than SCHEMA_VERSION"
+        );
+        assert_eq!(file.version, SCHEMA_VERSION);
+        assert!(!path.exists(), "expected the future file to be moved aside");
+        assert!(bak.exists(), "expected history.json.future to exist");
+        assert_eq!(std::fs::read(&bak).unwrap(), body);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
