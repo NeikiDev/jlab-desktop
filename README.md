@@ -99,7 +99,7 @@ Updates are manual. The app checks the GitHub releases API once on startup and, 
 4. Rust uploads the jar to `https://jlab.threat.rip/api/public/static-scan` via `multipart/form-data`. No file bytes cross the IPC boundary into the webview.
 5. The frontend renders the response, grouped by severity.
 
-The desktop client keeps the JavaScript side from making network calls. The Content Security Policy is restricted to `connect-src ipc:`, so any future `fetch()` would fail at runtime.
+The desktop client keeps the JavaScript side from making network calls. The Content Security Policy is `connect-src ipc: http://ipc.localhost`. Both sources are Tauri 2's IPC handler, neither is a public network egress, so any future `fetch()` to an external URL would fail at runtime.
 
 ## Build from source
 

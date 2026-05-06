@@ -82,7 +82,9 @@ notes for the affected version.
 
 The desktop client only talks to two hosts. There is no analytics endpoint, no
 crash reporter, and no third-party SDK. Every outbound request goes through
-Rust; the webview itself cannot reach the network (`connect-src ipc:`).
+Rust; the webview itself cannot reach the network (CSP
+`connect-src ipc: http://ipc.localhost`; both sources are Tauri 2's IPC
+handler, neither is a public network egress).
 
 | When                          | Method | URL                                                                  |
 | ----------------------------- | ------ | -------------------------------------------------------------------- |
@@ -103,7 +105,9 @@ ID, or scan content.
 For context, here is what the client does to limit blast radius:
 
 - The HTTP upload runs in Rust. The webview cannot make network calls
-  (`connect-src ipc:` in the CSP).
+  (CSP `connect-src ipc: http://ipc.localhost`; both sources are Tauri 2's
+  IPC handler, neither is a public network egress). Removing
+  `http://ipc.localhost` would break `invoke()`.
 - File size and zip-magic are validated before any network call.
 - Inner-jar size is checked against 50 MB before extraction, which guards
   against zip bombs.
