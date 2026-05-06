@@ -310,10 +310,10 @@ function ThreatRipCard({
         <div className="relative mt-1 h-[3px] w-full overflow-hidden rounded-[2px] bg-bg-inset">
           <div
             className={cn(
-              "absolute inset-y-0 left-0 origin-left rounded-[2px] transition-[width] duration-slow ease-out",
+              "absolute inset-y-0 left-0 right-0 origin-left rounded-[2px] transition-transform duration-slow ease-out will-change-transform",
               tone === "bad" ? "bg-sev-critical" : tone === "warn" ? "bg-sev-medium" : "bg-status-ok",
             )}
-            style={{ width: `${Math.max(2, Math.min(100, score))}%` }}
+            style={{ transform: `scaleX(${Math.max(2, Math.min(100, score)) / 100})` }}
           />
         </div>
       )}
