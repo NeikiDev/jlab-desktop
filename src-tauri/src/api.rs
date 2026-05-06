@@ -749,12 +749,23 @@ pub fn log_dir_size(app: AppHandle) -> Result<u64, AppError> {
     })
 }
 
-/// Delete rotated log files and truncate the active `debug.log` to zero.
-/// The active log can't be deleted because `tauri-plugin-log` holds it open,
-/// so we open it with `truncate(true)` to reset its size. The plugin keeps
-/// writing from its current offset, which leaves a zero-padded gap at the
-/// start of the file until the next rotation. Returns the number of bytes
-/// freed so the UI can show the result.
+/// Delete rotated log files and reset the active `debug.log`.
+///
+/// `tauri-plugin-log` keeps the active log file handle open and keeps writing
+/// from its current offset, so we cannot just truncate the file in place: the
+/// plugin would fill the gap with NUL bytes until the next rotation, leaving
+/// the log mostly garbage when the user attaches it to a support thread
+/// (#43).
+///
+/// On Unix we instead rename the active log out of the way and unlink the
+/// renamed copy. The plugin keeps writing into the now-orphaned inode (which
+/// disappears when the process exits), and the next log line lands in a
+/// freshly-created `debug.log` with no NUL prefix. On Windows we fall back to
+/// the in-place truncate because rename-while-open is rejected by the OS;
+/// the NUL-prefix issue still applies there until `tauri-plugin-log` exposes
+/// a `rotate_now()` API upstream.
+///
+/// Returns the number of bytes freed so the UI can show the result.
 #[tauri::command]
 pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
     let dir = app.path().app_log_dir().map_err(|e| AppError::Io {
@@ -781,6 +792,21 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
         }
         let size = meta.len();
         if name == ACTIVE_LOG_NAME {
+            #[cfg(unix)]
+            {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let rotated = path.with_file_name(format!("debug-cleared-{stamp}.log"));
+                if std::fs::rename(&path, &rotated).is_ok() {
+                    let _ = std::fs::remove_file(&rotated);
+                    bytes_freed += size;
+                    truncated += 1;
+                    continue;
+                }
+            }
+            // Windows path, plus last-resort fallback if rename failed on Unix.
             match std::fs::OpenOptions::new()
                 .write(true)
                 .truncate(true)
@@ -802,7 +828,7 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
         }
     }
     log::info!(
-        "cleared logs: removed {removed} rotated file(s), truncated {truncated} active file(s), freed {bytes_freed} bytes from {}",
+        "cleared logs: removed {removed} rotated file(s), reset {truncated} active file(s), freed {bytes_freed} bytes from {}",
         redact_path(&dir.to_string_lossy())
     );
     Ok(bytes_freed)
