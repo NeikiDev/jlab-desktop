@@ -218,10 +218,9 @@ export default function SignatureList({ result, onReset }: Props) {
         })}
       </div>
 
-      {/* Caveat: a hit is not a verdict. Always render. */}
-      <SignatureDisclaimer
-        hasConfirmedFamily={result.confirmedFamilies.length > 0}
-      />
+      {/* Caveat: a hit is not a verdict. Hidden when a family is confirmed,
+          since the red `FamilyAlert` above carries the authoritative copy. */}
+      {result.confirmedFamilies.length === 0 && <SignatureDisclaimer />}
 
       {/* Signature groups. */}
       {result.signatures.length === 0 ? (

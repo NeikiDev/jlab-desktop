@@ -22,7 +22,15 @@ const SNIPPET_BORDER: Record<Severity, string> = {
 };
 
 function hasContent(m: SignatureMatch): boolean {
-  return Boolean(m.className || m.member || m.path || m.matchedValue);
+  return Boolean(
+    m.className ||
+      m.member ||
+      m.path ||
+      m.matchedValue ||
+      m.encoding ||
+      m.original ||
+      m.decoded,
+  );
 }
 
 function splitJarPath(p: string): { outer: string | null; inner: string } {
@@ -217,6 +225,43 @@ function SignatureCardImpl({ signature }: Props) {
                           >
                             <code className="block whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.5] text-text-muted">
                               {m.matchedValue}
+                            </code>
+                          </div>
+                        )}
+                        {m.encoding && (
+                          <Row label="encoding">
+                            <code className="min-w-0 flex-1 break-all font-mono text-[12.5px] text-text-muted">
+                              {m.encoding}
+                            </code>
+                          </Row>
+                        )}
+                        {m.original && (
+                          <div
+                            className={cn(
+                              "mt-0.5 overflow-hidden rounded-[var(--radius-xs)] border border-border-faint border-l-2 bg-bg-inset px-2.5 py-1.5",
+                              SNIPPET_BORDER[signature.severity],
+                            )}
+                          >
+                            <div className="mb-1 font-mono text-[9.5px] font-semibold uppercase tracking-[0.16em] text-text-faint">
+                              encoded
+                            </div>
+                            <code className="block whitespace-pre-wrap break-all font-mono text-[12px] leading-[1.5] text-text-muted">
+                              {m.original}
+                            </code>
+                          </div>
+                        )}
+                        {m.decoded && (
+                          <div
+                            className={cn(
+                              "mt-0.5 overflow-hidden rounded-[var(--radius-xs)] border border-border-faint border-l-2 bg-bg-inset px-2.5 py-1.5",
+                              SNIPPET_BORDER[signature.severity],
+                            )}
+                          >
+                            <div className="mb-1 font-mono text-[9.5px] font-semibold uppercase tracking-[0.16em] text-text-faint">
+                              decoded
+                            </div>
+                            <code className="block whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.5] text-accent">
+                              {m.decoded}
                             </code>
                           </div>
                         )}

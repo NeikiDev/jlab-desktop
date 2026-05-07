@@ -147,23 +147,34 @@ critical | high | medium | low | info
 All five render. UI order in `SignatureList.tsx` matches this list. Unknown values fall back to `info`.
 
 **Signature `type` ↔ `kind` rename:**
-The API uses the JSON field name `type` per signature. Rust deserializes it via `#[serde(rename = "type")] kind: String` so the field becomes `kind` everywhere downstream (Rust struct, IPC payload, frontend). When extending, keep the rename. Don't propagate `type` past the API boundary, since it shadows the keyword in TS.
+The API uses the JSON field name `type` per signature. The frontend mirror in `types.ts` keeps it as `kind` so it does not shadow the TS keyword. When extending, keep the rename. Don't propagate `type` past the API boundary. The Rust shell forwards the raw JSON via `serde_json::Value`, so there is no Rust struct rename to maintain today.
 
-Known `kind` values today: `reference`, `string`, `heuristic`, `bytecode`, `structure`, `structural`, `file`, `deobfuscation`. New values must be added to `SignatureKind` in `types.ts` so TS narrowing keeps working.
+Known `kind` values today: `string`, `reference`, `bytecode`, `composite`, `heuristic`, `structural`, `deobfuscation`. `SignatureKind` in `types.ts` is `string`, so new values do not break compile, but list them here when the API adds one.
+
+**Confirmed families:**
+`confirmedFamilies` is an array of `{ name: string }`. The server suppresses per-family signature counts by design to avoid leaking which detection fired (an attacker can otherwise iterate evasions until the count drops). `ConfirmedFamily.signatureCount` stays optional in `types.ts` for older responses but the UI no longer relies on it.
+
+When one or more families are confirmed, the server also redacts individual signatures: `name` becomes `"Encoded content"`, `description` is dropped, `id` is omitted, and `redacted: true` is set on the signature. The frontend treats redaction as authoritative and does not try to undo it.
 
 **Signature match shape:**
-A match has four optional fields. Any combination can appear, all four can be null.
+A match always carries `className` and `member` when location is known. `deobfuscation` matches additionally carry `encoding`, `original` (the encoded bytes), and `decoded` (the recovered plaintext). Older response shapes also included `path` and `matchedValue`; both are kept optional on `SignatureMatch` so transitional payloads still render.
 
 ```ts
 {
   className?:    string | null   // e.g. "net/fabricmc/.../EventFactoryImpl"
   member?:       string | null   // method signature with descriptor
-  path?:         string | null   // archive path, may contain "!/" for nested JARs
-  matchedValue?: string | null   // the literal that matched (snippet, descriptor, note)
+  encoding?:     string | null   // deobfuscation: scheme, e.g. "xor-base64"
+  original?:     string | null   // deobfuscation: encoded source
+  decoded?:      string | null   // deobfuscation: recovered plaintext
+  path?:         string | null   // legacy: archive path, may contain "!/"
+  matchedValue?: string | null   // legacy: literal that matched
 }
 ```
 
-`SignatureCard.tsx` filters out matches where all four are null, then renders each remaining field row by row. When the API adds another field, extend the filter and the renderer; do not silently drop it.
+`SignatureCard.tsx` filters out matches where every field is empty, then renders each non-empty field row by row. When the API adds another field, extend `hasContent` and the renderer; do not silently drop it.
+
+**Top-level `note`:**
+The response includes a `note` field with the server's "matches alone are not a verdict" advisory. The desktop client renders its own copy of this caveat (see `SignatureDisclaimer.tsx`), so we don't surface `note` verbatim, but it is preserved as `ScanResult.note` for future use.
 
 ## Design rules
 

@@ -20,6 +20,9 @@ interface ApiMatch {
   member?: string | null;
   path?: string | null;
   matchedValue?: string | null;
+  encoding?: string | null;
+  original?: string | null;
+  decoded?: string | null;
 }
 
 interface ApiSignature {
@@ -31,6 +34,7 @@ interface ApiSignature {
   count?: number;
   matches?: ApiMatch[];
   family?: string | null;
+  redacted?: boolean;
 }
 
 interface ApiScanResult {
@@ -41,6 +45,7 @@ interface ApiScanResult {
   matchedSignatures: number;
   signatures: ApiSignature[];
   confirmedFamilies?: unknown;
+  note?: string;
 }
 
 interface ScanEnvelope {
@@ -119,6 +124,9 @@ export async function scanJar(path: string): Promise<ScanResult> {
         member: m.member ?? null,
         path: m.path ?? null,
         matchedValue: m.matchedValue ?? null,
+        encoding: m.encoding ?? null,
+        original: m.original ?? null,
+        decoded: m.decoded ?? null,
       }));
       const baseId = s.id && s.id.length > 0 ? s.id : (s.name ?? "signature");
       return {
@@ -130,6 +138,7 @@ export async function scanJar(path: string): Promise<ScanResult> {
         count: s.count ?? 0,
         matches,
         family: typeof s.family === "string" && s.family.length > 0 ? s.family : null,
+        redacted: s.redacted === true,
       };
     });
   } catch (e) {
@@ -145,6 +154,8 @@ export async function scanJar(path: string): Promise<ScanResult> {
       : null;
   const threatIntel = normalizeThreatIntel(envelope.threatIntel, sha256);
 
+  const note = asStr(rawObj.note);
+
   return {
     success: asBool(rawObj.success, false),
     fileName: asStr(rawObj.fileName) ?? "(unknown file)",
@@ -153,6 +164,7 @@ export async function scanJar(path: string): Promise<ScanResult> {
     matchedSignatures: asNum(rawObj.matchedSignatures) ?? signatures.length,
     signatures,
     confirmedFamilies,
+    note: note && note.length > 0 ? note : undefined,
     sha256,
     threatIntel,
   };
