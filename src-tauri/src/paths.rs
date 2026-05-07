@@ -19,23 +19,14 @@ pub const FRIENDLY_FOLDER: &str = "JLab";
 /// 0.3.x and earlier wrote here. Migrated on first launch of the new build.
 pub const LEGACY_FOLDER: &str = "JLAB-Desktop";
 
+// Only macOS and Linux resolve from `$HOME`. Windows reads `APPDATA` /
+// `LOCALAPPDATA` directly, so this helper is unused there and gating it
+// keeps clippy `-D warnings` happy on the Windows job.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn home_dir() -> Option<PathBuf> {
-    #[cfg(unix)]
-    {
-        std::env::var_os("HOME")
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-    }
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE")
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        None
-    }
+    std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(target_os = "macos")]
