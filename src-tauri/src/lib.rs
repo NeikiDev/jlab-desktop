@@ -1,6 +1,7 @@
 mod api;
 mod error;
 mod history;
+mod paths;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -63,18 +64,46 @@ pub fn run() {
         log::LevelFilter::Info
     };
 
+    // Resolve our friendly user-visible folder (`JLab`) ourselves so the
+    // bundle identifier and the data folder name stay decoupled. See
+    // `paths.rs` for the platform layout. Migration from the legacy
+    // `JLAB-Desktop` folder runs before the logger is up so any failures
+    // here only surface via stderr; that is intentional, the app must
+    // still boot if migration fails.
+    let friendly_log = paths::friendly_log_dir();
+    let friendly_data = paths::friendly_data_dir();
+
+    if let (Some(legacy), Some(target)) = (paths::legacy_log_dir(), friendly_log.as_ref()) {
+        if let Err(e) = paths::migrate_log_files(&legacy, target) {
+            eprintln!("jlab-desktop: log migration skipped: {e}");
+        }
+    }
+    if let (Some(legacy), Some(target)) = (paths::legacy_data_dir(), friendly_data.as_ref()) {
+        if let Err(e) = paths::migrate_history_file(&legacy, target) {
+            eprintln!("jlab-desktop: history migration skipped: {e}");
+        }
+    }
+
+    // Point the log plugin at the friendly folder. If the platform
+    // resolver fails (no HOME / USERPROFILE / APPDATA — extremely rare),
+    // fall back to Tauri's default `LogDir` so logging still works.
+    let log_target = match friendly_log.clone() {
+        Some(path) => Target::new(TargetKind::Folder {
+            path,
+            file_name: Some("debug".into()),
+        }),
+        None => Target::new(TargetKind::LogDir {
+            file_name: Some("debug".into()),
+        }),
+    };
+
     let log_plugin = LogBuilder::new()
         .level(log_level)
         .level_for("hyper", log::LevelFilter::Warn)
         .level_for("reqwest", log::LevelFilter::Warn)
         .max_file_size(2 * 1024 * 1024)
         .rotation_strategy(RotationStrategy::KeepSome(2))
-        .targets([
-            Target::new(TargetKind::Stderr),
-            Target::new(TargetKind::LogDir {
-                file_name: Some("debug".into()),
-            }),
-        ])
+        .targets([Target::new(TargetKind::Stderr), log_target])
         .build();
 
     tauri::Builder::default()
@@ -83,16 +112,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(api::ScanJobs::default())
         .manage(api::HttpClient(http))
-        .setup(|app| {
-            // History needs an on-disk home before any scan starts. If the
-            // platform-specific app_data_dir is unavailable (very rare), fall
-            // back to a per-user temp directory so the rest of the app keeps
-            // working. The fallback path is scoped by `$USER` and locked to
-            // 0o700 on Unix so a shared `/tmp` does not leak the scan history
-            // (file names + sha256s) to other local users (see issue #19).
-            let (data_dir, used_fallback) = match app.path().app_data_dir() {
-                Ok(dir) => (dir, false),
-                Err(_) => (fallback_data_dir(), true),
+        .setup(move |app| {
+            // History needs an on-disk home before any scan starts. Prefer
+            // the friendly resolver (`<base>/JLab`) so the user-visible
+            // folder is decoupled from the bundle identifier. Fall back to
+            // Tauri's `app_data_dir()` if the platform resolver fails, and
+            // to a per-user temp dir if even that is unavailable. The
+            // fallback path is scoped by `$USER` and locked to 0o700 on
+            // Unix so a shared `/tmp` does not leak history file names and
+            // SHA-256s to other local users (see issue #19).
+            let (data_dir, used_fallback) = match friendly_data.clone() {
+                Some(dir) => (dir, false),
+                None => match app.path().app_data_dir() {
+                    Ok(dir) => (dir, false),
+                    Err(_) => (fallback_data_dir(), true),
+                },
             };
             if let Err(e) = std::fs::create_dir_all(&data_dir) {
                 log::warn!(
@@ -102,7 +136,7 @@ pub fn run() {
             } else {
                 if used_fallback {
                     log::warn!(
-                        "app_data_dir unavailable; using fallback {}",
+                        "platform data dir unavailable; using fallback {}",
                         api::redact_path(&data_dir.to_string_lossy())
                     );
                 } else {
@@ -112,13 +146,12 @@ pub fn run() {
                     );
                 }
                 // Lock the data dir to 0o700 on Unix on every path. The
-                // platform `app_data_dir` (e.g. `~/.local/share/JLAB-Desktop`)
-                // inherits the home-directory mode, which on Fedora and
-                // openSUSE defaults to 0o755, so without this the scan
-                // history (file names + SHA-256s) would be readable by
-                // other local users. macOS uses 0o700 on the home dir and
-                // Windows uses per-user ACLs, so this is a no-op there but
-                // never hurts. (#19, #39)
+                // platform data dir (e.g. `~/.local/share/JLab`) inherits
+                // the home-directory mode, which on Fedora and openSUSE
+                // defaults to 0o755, so without this the scan history
+                // (file names + SHA-256s) would be readable by other local
+                // users. macOS uses 0o700 on the home dir and Windows uses
+                // per-user ACLs, so this is defense in depth there. (#19, #39, #46)
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
@@ -133,7 +166,10 @@ pub fn run() {
                 }
             }
             app.manage(history::HistoryStore::new(data_dir));
-            if let Ok(log_dir) = app.path().app_log_dir() {
+            let log_dir = friendly_log
+                .clone()
+                .or_else(|| app.path().app_log_dir().ok());
+            if let Some(log_dir) = log_dir {
                 log::info!(
                     "app log dir: {}",
                     api::redact_path(&log_dir.to_string_lossy())

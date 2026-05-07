@@ -223,8 +223,14 @@ When you write text that lands in the codebase (UI copy, comments, docs, commit 
 
 Past scans are persisted on the user's device, no network involved.
 
-- File: `history.json` in the Tauri app data dir (`AppHandle::path().app_data_dir()`,
-  resolved once at startup and stored in app state as `HistoryStore`).
+- File: `history.json` in the friendly app data dir resolved by
+  `paths::friendly_data_dir()`. The folder name (`JLab`) is intentionally
+  decoupled from the Tauri bundle identifier (`rip.threat.jlab-desktop`)
+  so users do not see a reverse-DNS folder. Resolved once at startup and
+  stored in app state as `HistoryStore`. Platform layout:
+  `~/Library/Application Support/JLab/` (macOS),
+  `%APPDATA%\JLab\` (Windows),
+  `$XDG_DATA_HOME/JLab/` or `~/.local/share/JLab/` (Linux).
 - Schema: `{ version: 1, entries: HistoryEntry[] }`. An entry holds `id`,
   `scannedAt` (ISO 8601 UTC), `fileName`, `fileSizeBytes`, `sha256`,
   `severityCounts`, `topSeverity`, and `signatureCount`. Mirrored in

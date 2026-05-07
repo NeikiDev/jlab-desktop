@@ -55,7 +55,8 @@
     },
     "windows": {
       "wix": {
-        "language": "en-US"
+        "language": "en-US",
+        "upgradeCode": "2E5324F3-603E-4837-9E6D-724525410B27"
       }
     }
   }

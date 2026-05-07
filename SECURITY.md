@@ -123,8 +123,9 @@ For context, here is what the client does to limit blast radius:
   window, internal devtools toggle).
 - On Unix, the app data directory (where `history.json` lives) is locked
   to mode `0o700` on startup, and `history.json` itself is written with
-  mode `0o600` after every save. This applies on both the platform
-  `app_data_dir` path and the `/tmp` fallback, so other local users on a
-  shared Linux box cannot read scan file names or SHA-256s. macOS uses
-  `0o700` on the home dir and Windows uses per-user ACLs, so this is
-  defense in depth on those platforms.
+  mode `0o600` after every save. This applies to the friendly data path
+  (`~/.local/share/JLab/`), the legacy `JLAB-Desktop` path during
+  migration, and the `/tmp` fallback, so other local users on a shared
+  Linux box cannot read scan file names or SHA-256s. macOS uses `0o700`
+  on the home dir and Windows uses per-user ACLs, so this is defense in
+  depth on those platforms.
