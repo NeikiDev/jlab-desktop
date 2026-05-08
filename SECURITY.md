@@ -119,8 +119,12 @@ For context, here is what the client does to limit blast radius:
   lookalikes like `github.com.attacker.example` are rejected. The full
   check lives in `open_url` (and `is_github_repo_url`) in
   `src-tauri/src/api.rs`.
-- The Tauri capability set grants only what the UI uses (dialog, log,
-  window, internal devtools toggle).
+- The Tauri capability set grants only what the UI uses: `core:default`,
+  `core:window:default`, `core:event:default` (the frontend listens for
+  `scan://phase` events emitted by Rust),
+  `core:webview:allow-internal-toggle-devtools`, `dialog:allow-open`,
+  `log:default`, and `opener:allow-open-url`. The capability file itself is
+  the source of truth: `src-tauri/capabilities/default.json`.
 - On Unix, the app data directory (where `history.json` lives) is locked
   to mode `0o700` on startup, and `history.json` itself is written with
   mode `0o600` after every save. This applies to the friendly data path
