@@ -6,6 +6,7 @@ use reqwest::multipart::{Form, Part};
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Notify;
 
 use crate::error::AppError;
@@ -853,18 +854,11 @@ pub fn open_log_dir(app: AppHandle) -> Result<(), AppError> {
         })?;
     }
 
-    #[cfg(target_os = "macos")]
-    let cmd = std::process::Command::new("open").arg(&dir).spawn();
-
-    #[cfg(target_os = "windows")]
-    let cmd = std::process::Command::new("explorer").arg(&dir).spawn();
-
-    #[cfg(target_os = "linux")]
-    let cmd = std::process::Command::new("xdg-open").arg(&dir).spawn();
-
-    cmd.map_err(|e| AppError::Io {
-        message: e.to_string(),
-    })?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| AppError::Io {
+            message: e.to_string(),
+        })?;
     log::info!("opened log dir {}", redact_path(&dir.to_string_lossy()));
     Ok(())
 }
