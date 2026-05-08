@@ -1,10 +1,6 @@
 import { DISCORD_URL, openUrl } from "../api";
 
-interface Props {
-  hasConfirmedFamily: boolean;
-}
-
-export default function SignatureDisclaimer({ hasConfirmedFamily }: Props) {
+export default function SignatureDisclaimer() {
   return (
     <section
       role="note"
@@ -51,26 +47,12 @@ export default function SignatureDisclaimer({ hasConfirmedFamily }: Props) {
           please review flagged findings manually before drawing conclusions.
         </p>
         <p className="mt-1.5 mb-0">
-          <span className="font-semibold text-text">Exception:</span>{" "}
-          {hasConfirmedFamily ? (
-            <>
-              the{" "}
-              <span className="font-semibold text-sev-critical">
-                &ldquo;Malware family confirmed&rdquo;
-              </span>{" "}
-              box above identifies a known family through its signatures and
-              can be treated as confirmed.
-            </>
-          ) : (
-            <>
-              if a{" "}
-              <span className="font-semibold text-sev-critical">
-                &ldquo;Malware family confirmed&rdquo;
-              </span>{" "}
-              box is shown, that family has been reliably identified through
-              its signatures and can be treated as confirmed.
-            </>
-          )}
+          <span className="font-semibold text-text">Exception:</span> if a{" "}
+          <span className="font-semibold text-sev-critical">
+            &ldquo;Confirmed malware&rdquo;
+          </span>{" "}
+          box is shown, that family has been reliably identified through its
+          signatures and can be treated as confirmed.
         </p>
         <p className="mt-1.5 mb-0">
           Questions about a specific finding? Join our{" "}

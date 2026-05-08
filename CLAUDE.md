@@ -147,23 +147,34 @@ critical | high | medium | low | info
 All five render. UI order in `SignatureList.tsx` matches this list. Unknown values fall back to `info`.
 
 **Signature `type` ↔ `kind` rename:**
-The API uses the JSON field name `type` per signature. Rust deserializes it via `#[serde(rename = "type")] kind: String` so the field becomes `kind` everywhere downstream (Rust struct, IPC payload, frontend). When extending, keep the rename. Don't propagate `type` past the API boundary, since it shadows the keyword in TS.
+The API uses the JSON field name `type` per signature. The frontend mirror in `types.ts` keeps it as `kind` so it does not shadow the TS keyword. When extending, keep the rename. Don't propagate `type` past the API boundary. The Rust shell forwards the raw JSON via `serde_json::Value`, so there is no Rust struct rename to maintain today.
 
-Known `kind` values today: `reference`, `string`, `heuristic`, `bytecode`, `structure`, `structural`, `file`, `deobfuscation`. New values must be added to `SignatureKind` in `types.ts` so TS narrowing keeps working.
+Known `kind` values today: `string`, `reference`, `bytecode`, `composite`, `heuristic`, `structural`, `deobfuscation`. `SignatureKind` in `types.ts` is `string`, so new values do not break compile, but list them here when the API adds one.
+
+**Confirmed families:**
+`confirmedFamilies` is an array of `{ name: string }`. The server suppresses per-family signature counts by design to avoid leaking which detection fired (an attacker can otherwise iterate evasions until the count drops). `ConfirmedFamily.signatureCount` stays optional in `types.ts` for older responses but the UI no longer relies on it.
+
+When one or more families are confirmed, the server also redacts individual signatures: `name` becomes `"Encoded content"`, `description` is dropped, `id` is omitted, and `redacted: true` is set on the signature. The frontend treats redaction as authoritative and does not try to undo it.
 
 **Signature match shape:**
-A match has four optional fields. Any combination can appear, all four can be null.
+A match always carries `className` and `member` when location is known. `deobfuscation` matches additionally carry `encoding`, `original` (the encoded bytes), and `decoded` (the recovered plaintext). Older response shapes also included `path` and `matchedValue`; both are kept optional on `SignatureMatch` so transitional payloads still render.
 
 ```ts
 {
   className?:    string | null   // e.g. "net/fabricmc/.../EventFactoryImpl"
   member?:       string | null   // method signature with descriptor
-  path?:         string | null   // archive path, may contain "!/" for nested JARs
-  matchedValue?: string | null   // the literal that matched (snippet, descriptor, note)
+  encoding?:     string | null   // deobfuscation: scheme, e.g. "xor-base64"
+  original?:     string | null   // deobfuscation: encoded source
+  decoded?:      string | null   // deobfuscation: recovered plaintext
+  path?:         string | null   // legacy: archive path, may contain "!/"
+  matchedValue?: string | null   // legacy: literal that matched
 }
 ```
 
-`SignatureCard.tsx` filters out matches where all four are null, then renders each remaining field row by row. When the API adds another field, extend the filter and the renderer; do not silently drop it.
+`SignatureCard.tsx` filters out matches where every field is empty, then renders each non-empty field row by row. When the API adds another field, extend `hasContent` and the renderer; do not silently drop it.
+
+**Top-level `note`:**
+The response includes a `note` field with the server's "matches alone are not a verdict" advisory. The desktop client renders its own copy of this caveat (see `SignatureDisclaimer.tsx`), so we don't surface `note` verbatim, but it is preserved as `ScanResult.note` for future use.
 
 ## Design rules
 
@@ -176,7 +187,7 @@ A match has four optional fields. Any combination can appear, all four can be nu
   commands sparingly; prefer extending an existing flow.
 - **Outbound HTTP must send `x-jlab-client: desktop`.** Both `scan_jar` and `check_status` set it. Any future request to `jlab.threat.rip` must do the same.
 - **Errors are typed, not strings.** Always extend `AppError` (with a new `#[serde(rename_all = "snake_case")]` variant) and the matching union in `src/lib/types.ts`. Never return raw `String` errors to the frontend. The `ErrorBanner` component switches on `kind`.
-- **The frontend doesn't talk HTTP.** All network traffic goes through Rust. CSP is restrictive (`connect-src ipc:` only). Adding `fetch()` calls in the React code will be blocked.
+- **The frontend doesn't talk HTTP.** All network traffic goes through Rust. The CSP is `connect-src ipc: http://ipc.localhost`. Both sources are Tauri 2's IPC handler and are required for `invoke()`, so do not drop `http://ipc.localhost`. `script-src 'self'` blocks inline and remote scripts. `img-src 'self' data: asset: http://asset.localhost` covers Tauri's local-asset protocol. Adding `fetch()` calls to a public URL in React will be blocked; route through a Rust command instead.
 - **React functional components with hooks only.** No class components. Use `useState`, `useReducer`, `useMemo`, `useEffect`, `useRef`, `useCallback`. The `react-jsx` runtime is on, so no `import React` is needed in `.tsx` files. Do not enable `<StrictMode>` in `main.tsx` (the Tauri drag-drop listener and the `RemoteStatus` polling are designed for single-registration; StrictMode's dev double-mount would duplicate them).
 - **State machine is the source of truth.** `App.tsx`'s `ScanState` discriminated union drives everything via `useReducer`. Don't add side-state for "scanning AND error simultaneously". Encode it as a new variant if needed.
 - **Tailwind v4, tokens in `src/index.css` `@theme`.** No `tailwind.config.js`, no `postcss.config.js`. Compose utility classes; use `var(--token)` only when bracket syntax preserves an exact value (animations, exact radii). Do not write per-component `<style>` blocks: React has no scoped CSS, and one-offs should land in `src/index.css` with a clearly-named class.
@@ -223,8 +234,14 @@ When you write text that lands in the codebase (UI copy, comments, docs, commit 
 
 Past scans are persisted on the user's device, no network involved.
 
-- File: `history.json` in the Tauri app data dir (`AppHandle::path().app_data_dir()`,
-  resolved once at startup and stored in app state as `HistoryStore`).
+- File: `history.json` in the friendly app data dir resolved by
+  `paths::friendly_data_dir()`. The folder name (`JLab`) is intentionally
+  decoupled from the Tauri bundle identifier (`rip.threat.jlab-desktop`)
+  so users do not see a reverse-DNS folder. Resolved once at startup and
+  stored in app state as `HistoryStore`. Platform layout:
+  `~/Library/Application Support/JLab/` (macOS),
+  `%APPDATA%\JLab\` (Windows),
+  `$XDG_DATA_HOME/JLab/` or `~/.local/share/JLab/` (Linux).
 - Schema: `{ version: 1, entries: HistoryEntry[] }`. An entry holds `id`,
   `scannedAt` (ISO 8601 UTC), `fileName`, `fileSizeBytes`, `sha256`,
   `severityCounts`, `topSeverity`, and `signatureCount`. Mirrored in

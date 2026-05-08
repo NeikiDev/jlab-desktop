@@ -206,8 +206,11 @@ export default function SignatureList({ result, onReset }: Props) {
               </div>
               <div className={cn("relative h-[3px] w-full overflow-hidden rounded-[2px]", SEV_BAR_SOFT[sev])}>
                 <div
-                  className={cn("absolute inset-y-0 left-0 origin-left rounded-[2px] transition-[width] duration-slow ease-out", SEV_BAR[sev])}
-                  style={{ width: `${pct}%` }}
+                  className={cn(
+                    "absolute inset-y-0 left-0 right-0 origin-left rounded-[2px] transition-transform duration-slow ease-out will-change-transform",
+                    SEV_BAR[sev],
+                  )}
+                  style={{ transform: `scaleX(${pct / 100})` }}
                 />
               </div>
             </div>
@@ -215,10 +218,9 @@ export default function SignatureList({ result, onReset }: Props) {
         })}
       </div>
 
-      {/* Caveat: a hit is not a verdict. Always render. */}
-      <SignatureDisclaimer
-        hasConfirmedFamily={result.confirmedFamilies.length > 0}
-      />
+      {/* Caveat: a hit is not a verdict. Hidden when a family is confirmed,
+          since the red `FamilyAlert` above carries the authoritative copy. */}
+      {result.confirmedFamilies.length === 0 && <SignatureDisclaimer />}
 
       {/* Signature groups. */}
       {result.signatures.length === 0 ? (

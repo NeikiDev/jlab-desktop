@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -6,10 +6,25 @@ use reqwest::multipart::{Form, Part};
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Notify;
 
 use crate::error::AppError;
 use crate::history::{self, HistoryStore};
+use crate::paths;
+
+/// Resolve the log directory the app actually writes to. Mirrors the choice
+/// `lib.rs::run` makes when configuring the log plugin: prefer the friendly
+/// folder (`<base>/JLab[/logs]`), fall back to Tauri's `app_log_dir()` if
+/// the platform resolver is unavailable.
+fn resolve_log_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    if let Some(p) = paths::friendly_log_dir() {
+        return Ok(p);
+    }
+    app.path().app_log_dir().map_err(|e| AppError::Io {
+        message: format!("resolve log dir: {e}"),
+    })
+}
 
 /// Replace the user's home directory prefix with `~` so log lines don't leak
 /// the system username. Operates on display strings only.
@@ -738,9 +753,7 @@ fn read_log_dir_total(dir: &Path) -> std::io::Result<u64> {
 
 #[tauri::command]
 pub fn log_dir_size(app: AppHandle) -> Result<u64, AppError> {
-    let dir = app.path().app_log_dir().map_err(|e| AppError::Io {
-        message: format!("resolve log dir: {e}"),
-    })?;
+    let dir = resolve_log_dir(&app)?;
     if !dir.exists() {
         return Ok(0);
     }
@@ -749,17 +762,26 @@ pub fn log_dir_size(app: AppHandle) -> Result<u64, AppError> {
     })
 }
 
-/// Delete rotated log files and truncate the active `debug.log` to zero.
-/// The active log can't be deleted because `tauri-plugin-log` holds it open,
-/// so we open it with `truncate(true)` to reset its size. The plugin keeps
-/// writing from its current offset, which leaves a zero-padded gap at the
-/// start of the file until the next rotation. Returns the number of bytes
-/// freed so the UI can show the result.
+/// Delete rotated log files and reset the active `debug.log`.
+///
+/// `tauri-plugin-log` keeps the active log file handle open and keeps writing
+/// from its current offset, so we cannot just truncate the file in place: the
+/// plugin would fill the gap with NUL bytes until the next rotation, leaving
+/// the log mostly garbage when the user attaches it to a support thread
+/// (#43).
+///
+/// On Unix we instead rename the active log out of the way and unlink the
+/// renamed copy. The plugin keeps writing into the now-orphaned inode (which
+/// disappears when the process exits), and the next log line lands in a
+/// freshly-created `debug.log` with no NUL prefix. On Windows we fall back to
+/// the in-place truncate because rename-while-open is rejected by the OS;
+/// the NUL-prefix issue still applies there until `tauri-plugin-log` exposes
+/// a `rotate_now()` API upstream.
+///
+/// Returns the number of bytes freed so the UI can show the result.
 #[tauri::command]
 pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
-    let dir = app.path().app_log_dir().map_err(|e| AppError::Io {
-        message: format!("resolve log dir: {e}"),
-    })?;
+    let dir = resolve_log_dir(&app)?;
     if !dir.exists() {
         return Ok(0);
     }
@@ -781,6 +803,26 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
         }
         let size = meta.len();
         if name == ACTIVE_LOG_NAME {
+            #[cfg(unix)]
+            {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let rotated = path.with_file_name(format!("debug-cleared-{stamp}.log"));
+                if std::fs::rename(&path, &rotated).is_ok() {
+                    match std::fs::remove_file(&rotated) {
+                        Ok(()) => bytes_freed += size,
+                        Err(e) => log::warn!(
+                            "rotated active log to {} but could not unlink: {e}",
+                            redact_path(&rotated.to_string_lossy())
+                        ),
+                    }
+                    truncated += 1;
+                    continue;
+                }
+            }
+            // Windows path, plus last-resort fallback if rename failed on Unix.
             match std::fs::OpenOptions::new()
                 .write(true)
                 .truncate(true)
@@ -791,7 +833,10 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
                     truncated += 1;
                 }
                 Err(e) => {
-                    log::warn!("could not truncate active log: {e}");
+                    log::warn!(
+                        "could not truncate active log {}: {e}",
+                        redact_path(&path.to_string_lossy())
+                    );
                 }
             }
             continue;
@@ -802,7 +847,7 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
         }
     }
     log::info!(
-        "cleared logs: removed {removed} rotated file(s), truncated {truncated} active file(s), freed {bytes_freed} bytes from {}",
+        "cleared logs: removed {removed} rotated file(s), reset {truncated} active file(s), freed {bytes_freed} bytes from {}",
         redact_path(&dir.to_string_lossy())
     );
     Ok(bytes_freed)
@@ -810,27 +855,18 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
 
 #[tauri::command]
 pub fn open_log_dir(app: AppHandle) -> Result<(), AppError> {
-    let dir = app.path().app_log_dir().map_err(|e| AppError::Io {
-        message: format!("resolve log dir: {e}"),
-    })?;
+    let dir = resolve_log_dir(&app)?;
     if !dir.exists() {
         std::fs::create_dir_all(&dir).map_err(|e| AppError::Io {
             message: format!("create log dir: {e}"),
         })?;
     }
 
-    #[cfg(target_os = "macos")]
-    let cmd = std::process::Command::new("open").arg(&dir).spawn();
-
-    #[cfg(target_os = "windows")]
-    let cmd = std::process::Command::new("explorer").arg(&dir).spawn();
-
-    #[cfg(target_os = "linux")]
-    let cmd = std::process::Command::new("xdg-open").arg(&dir).spawn();
-
-    cmd.map_err(|e| AppError::Io {
-        message: e.to_string(),
-    })?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| AppError::Io {
+            message: e.to_string(),
+        })?;
     log::info!("opened log dir {}", redact_path(&dir.to_string_lossy()));
     Ok(())
 }
@@ -872,6 +908,9 @@ fn is_github_repo_url(url: &str) -> bool {
         !s.is_empty()
             && s != "."
             && s != ".."
+            && !s.starts_with('.')
+            && !s.ends_with('.')
+            && !s.contains("..")
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
     };
@@ -1283,6 +1322,12 @@ mod tests {
         // path traversal-ish
         assert!(!is_github_repo_url("https://github.com/../repo"));
         assert!(!is_github_repo_url("https://github.com/owner/.."));
+        // dot-edge segments: GitHub's own rules forbid these shapes,
+        // so the validator should match. See issue #61.
+        assert!(!is_github_repo_url("https://github.com/.evil/.repo"));
+        assert!(!is_github_repo_url("https://github.com/evil./repo."));
+        assert!(!is_github_repo_url("https://github.com/foo..bar/baz"));
+        assert!(!is_github_repo_url("https://github.com/owner/foo.."));
         // disallowed chars
         assert!(!is_github_repo_url("https://github.com/own er/repo"));
     }

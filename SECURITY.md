@@ -82,7 +82,9 @@ notes for the affected version.
 
 The desktop client only talks to two hosts. There is no analytics endpoint, no
 crash reporter, and no third-party SDK. Every outbound request goes through
-Rust; the webview itself cannot reach the network (`connect-src ipc:`).
+Rust; the webview itself cannot reach the network (CSP
+`connect-src ipc: http://ipc.localhost`; both sources are Tauri 2's IPC
+handler, neither is a public network egress).
 
 | When                          | Method | URL                                                                  |
 | ----------------------------- | ------ | -------------------------------------------------------------------- |
@@ -103,7 +105,9 @@ ID, or scan content.
 For context, here is what the client does to limit blast radius:
 
 - The HTTP upload runs in Rust. The webview cannot make network calls
-  (`connect-src ipc:` in the CSP).
+  (CSP `connect-src ipc: http://ipc.localhost`; both sources are Tauri 2's
+  IPC handler, neither is a public network egress). Removing
+  `http://ipc.localhost` would break `invoke()`.
 - File size and zip-magic are validated before any network call.
 - Inner-jar size is checked against 50 MB before extraction, which guards
   against zip bombs.
@@ -115,5 +119,17 @@ For context, here is what the client does to limit blast radius:
   lookalikes like `github.com.attacker.example` are rejected. The full
   check lives in `open_url` (and `is_github_repo_url`) in
   `src-tauri/src/api.rs`.
-- The Tauri capability set grants only what the UI uses (dialog, log,
-  window, internal devtools toggle).
+- The Tauri capability set grants only what the UI uses: `core:default`,
+  `core:window:default`, `core:event:default` (the frontend listens for
+  `scan://phase` events emitted by Rust),
+  `core:webview:allow-internal-toggle-devtools`, `dialog:allow-open`,
+  `log:default`, and `opener:allow-open-url`. The capability file itself is
+  the source of truth: `src-tauri/capabilities/default.json`.
+- On Unix, the app data directory (where `history.json` lives) is locked
+  to mode `0o700` on startup, and `history.json` itself is written with
+  mode `0o600` after every save. This applies to the friendly data path
+  (`~/.local/share/JLab/`), the legacy `JLAB-Desktop` path during
+  migration, and the `/tmp` fallback, so other local users on a shared
+  Linux box cannot read scan file names or SHA-256s. macOS uses `0o700`
+  on the home dir and Windows uses per-user ACLs, so this is defense in
+  depth on those platforms.

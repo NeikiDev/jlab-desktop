@@ -3,10 +3,15 @@ export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type SignatureKind = string;
 
 export interface SignatureMatch {
-  className: string | null;
-  member: string | null;
-  path: string | null;
-  matchedValue: string | null;
+  className?: string | null;
+  member?: string | null;
+  path?: string | null;
+  matchedValue?: string | null;
+  // Present on `deobfuscation` matches: the encoding scheme (e.g.
+  // "xor-base64"), the encoded source bytes, and the decoded plaintext.
+  encoding?: string | null;
+  original?: string | null;
+  decoded?: string | null;
 }
 
 export interface Signature {
@@ -17,12 +22,20 @@ export interface Signature {
   kind: SignatureKind;
   count: number;
   matches: SignatureMatch[];
-  family: string | null;
+  family?: string | null;
+  // Set by the server when a malware family is confirmed: per-signature
+  // names and descriptions get redacted to prevent attackers from using the
+  // public scanner to confirm whether their evasion bypassed a specific
+  // detection. The card still shows severity + count, just not the label.
+  redacted?: boolean;
 }
 
 export interface ConfirmedFamily {
   name: string;
-  signatureCount: number;
+  // Older builds returned a per-family signature count. The current public
+  // API redacts individual counts when a family is confirmed, so this is
+  // optional and may be absent.
+  signatureCount?: number;
 }
 
 export interface ThreatRipIntel {
@@ -77,6 +90,9 @@ export interface ScanResult {
   matchedSignatures: number;
   signatures: Signature[];
   confirmedFamilies: ConfirmedFamily[];
+  // Server-side advisory ("matches alone are not a final verdict"). We don't
+  // surface this verbatim today but keep it on the type so future copy can.
+  note?: string;
   sha256: string | null;
   threatIntel: ThreatIntel | null;
 }

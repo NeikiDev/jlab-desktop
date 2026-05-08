@@ -8,9 +8,9 @@
     "core:window:default",
     "core:event:default",
     "core:webview:allow-internal-toggle-devtools",
-    "dialog:default",
     "dialog:allow-open",
     "log:default",
-    "opener:allow-open-url"
+    "opener:allow-open-url",
+    "opener:allow-open-path"
   ]
 }

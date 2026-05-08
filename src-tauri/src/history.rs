@@ -1,6 +1,12 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Process-local sequence appended to every history entry id so two scans
+/// of the same file completed in the same millisecond produce different ids.
+/// See issue #44: without this, `history_delete` would remove all matches.
+static ENTRY_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use serde::{Deserialize, Serialize};
 
@@ -105,8 +111,12 @@ pub async fn delete(store: HistoryStore, id: String) -> Result<(), AppError> {
     spawn_blocking_history(move || {
         let _g = store.inner.lock.lock();
         let mut file = read_or_default(&store.file_path());
+        let before = file.entries.len();
         file.entries.retain(|e| e.id != id);
-        file.version = SCHEMA_VERSION;
+        let removed = before - file.entries.len();
+        if removed > 1 {
+            log::warn!("history delete removed {removed} rows for id {id}; expected 1");
+        }
         ensure_dir(&store)?;
         write_atomic(&store, &file)
     })
@@ -139,7 +149,6 @@ fn append_blocking(store: &HistoryStore, entry: HistoryEntry) -> Result<(), AppE
     let _g = store.inner.lock.lock();
     ensure_dir(store)?;
     let mut file = read_or_default(&store.file_path());
-    file.version = SCHEMA_VERSION;
     file.entries.push(entry);
     if file.entries.len() > HISTORY_CAP {
         let drop_count = file.entries.len() - HISTORY_CAP;
@@ -167,8 +176,30 @@ fn read_or_default(path: &Path) -> HistoryFile {
         Ok(b) => b,
         Err(_) => return HistoryFile::default(),
     };
-    match serde_json::from_slice(&bytes) {
-        Ok(file) => file,
+    match serde_json::from_slice::<HistoryFile>(&bytes) {
+        Ok(file) if file.version <= SCHEMA_VERSION => file,
+        Ok(file) => {
+            // A newer build wrote this file. If we deserialize it and append,
+            // we silently strip any v(N+1) fields and write back as v1, which
+            // is the "old version trampling new version" footgun. Treat it
+            // the same as a corrupt file: move aside, start empty.
+            let bak = path.with_extension("json.future");
+            if let Err(rename_err) = std::fs::rename(path, &bak) {
+                log::warn!(
+                    "history.json schema v{} is newer than this build's v{SCHEMA_VERSION}; \
+                     could not move aside ({rename_err}), starting empty",
+                    file.version
+                );
+            } else {
+                log::warn!(
+                    "history.json schema v{} is newer than this build's v{SCHEMA_VERSION}; \
+                     moved to {} and starting empty",
+                    file.version,
+                    bak.display()
+                );
+            }
+            HistoryFile::default()
+        }
         Err(e) => {
             let bak = path.with_extension("json.corrupt");
             if let Err(rename_err) = std::fs::rename(path, &bak) {
@@ -198,6 +229,20 @@ fn write_atomic(store: &HistoryStore, contents: &HistoryFile) -> Result<(), AppE
     std::fs::rename(&tmp, &final_path).map_err(|e| AppError::HistoryIo {
         message: format!("rename: {e}"),
     })?;
+    // Belt-and-braces on Unix: even if the data dir was created earlier
+    // under a wider mode (e.g. 0o755 inherited from the home dir on
+    // Fedora/openSUSE), the file itself stays 0o600 so other local users
+    // cannot read scan filenames and SHA-256s. The dir is also chmodded to
+    // 0o700 on startup; this is the per-file safety net. (#19, #39)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o600))
+        {
+            log::warn!("could not chmod 0600 history.json: {e}");
+        }
+    }
     Ok(())
 }
 
@@ -247,7 +292,11 @@ pub fn build_entry(
         .unwrap_or_default();
     let scanned_at_ms = now.as_millis() as u64;
     let scanned_at = iso8601_utc(now.as_secs() as i64, now.subsec_millis());
-    let id = format!("{scanned_at_ms}-{}", sha256.get(..8).unwrap_or(sha256));
+    let seq = ENTRY_SEQ.fetch_add(1, Ordering::Relaxed);
+    let id = format!(
+        "{scanned_at_ms}-{seq:x}-{}",
+        sha256.get(..8).unwrap_or(sha256)
+    );
 
     HistoryEntry {
         id,
@@ -353,12 +402,54 @@ mod tests {
         assert!(e.id.ends_with("-abcdef01"));
     }
 
+    // Regression: two scans of the same file in the same millisecond must
+    // not collide. Without the per-process sequence appended to the id,
+    // `history_delete` would remove both rows on a single delete click.
+    #[test]
+    fn build_entry_id_unique_for_same_ms_same_file() {
+        let scan = serde_json::json!({ "signatures": [] });
+        let a = build_entry(&scan, "x.jar", 0, "abcdef0123456789");
+        let b = build_entry(&scan, "x.jar", 0, "abcdef0123456789");
+        assert_ne!(a.id, b.id, "ids must differ even on same-ms same-file");
+    }
+
     #[test]
     fn build_entry_no_signatures() {
         let scan = serde_json::json!({ "signatures": [] });
         let e = build_entry(&scan, "x.jar", 0, "00");
         assert_eq!(e.signature_count, 0);
         assert_eq!(e.top_severity, "info");
+    }
+
+    #[test]
+    fn future_history_is_moved_aside() {
+        let dir = std::env::temp_dir().join(format!(
+            "jlab-history-future-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        let bak = dir.join("history.json.future");
+
+        // A v999 file with one entry. Older build must not trample it.
+        let body = br#"{"version":999,"entries":[{"id":"x","scannedAt":"2026-01-01T00:00:00.000Z","fileName":"f.jar","fileSizeBytes":1,"sha256":"00","severityCounts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"topSeverity":"info","signatureCount":0}]}"#;
+        std::fs::write(&path, body).unwrap();
+
+        let file = read_or_default(&path);
+        assert!(
+            file.entries.is_empty(),
+            "expected empty default when on-disk schema is newer than SCHEMA_VERSION"
+        );
+        assert_eq!(file.version, SCHEMA_VERSION);
+        assert!(!path.exists(), "expected the future file to be moved aside");
+        assert!(bak.exists(), "expected history.json.future to exist");
+        assert_eq!(std::fs::read(&bak).unwrap(), body);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
