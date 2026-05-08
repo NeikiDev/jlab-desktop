@@ -67,20 +67,25 @@ pub fn run() {
     // Resolve our friendly user-visible folder (`JLab`) ourselves so the
     // bundle identifier and the data folder name stay decoupled. See
     // `paths.rs` for the platform layout. Migration from the legacy
-    // `JLAB-Desktop` folder runs before the logger is up so any failures
-    // here only surface via stderr; that is intentional, the app must
-    // still boot if migration fails.
+    // `JLAB-Desktop` folder runs before the logger is up, so any failures
+    // here are buffered and replayed via `log::warn!` from inside the
+    // `setup` callback once the log plugin is initialized. Windows
+    // packaged builds detach stdout/stderr (`windows_subsystem = "windows"`
+    // in `main.rs`), so a plain `eprintln!` would vanish there; the
+    // user only ever sees `debug.log`.
     let friendly_log = paths::friendly_log_dir();
     let friendly_data = paths::friendly_data_dir();
 
+    let mut deferred_migration_warnings: Vec<String> = Vec::new();
+
     if let (Some(legacy), Some(target)) = (paths::legacy_log_dir(), friendly_log.as_ref()) {
         if let Err(e) = paths::migrate_log_files(&legacy, target) {
-            eprintln!("jlab-desktop: log migration skipped: {e}");
+            deferred_migration_warnings.push(format!("log migration skipped: {e}"));
         }
     }
     if let (Some(legacy), Some(target)) = (paths::legacy_data_dir(), friendly_data.as_ref()) {
         if let Err(e) = paths::migrate_history_file(&legacy, target) {
-            eprintln!("jlab-desktop: history migration skipped: {e}");
+            deferred_migration_warnings.push(format!("history migration skipped: {e}"));
         }
     }
 
@@ -113,6 +118,13 @@ pub fn run() {
         .manage(api::ScanJobs::default())
         .manage(api::HttpClient(http))
         .setup(move |app| {
+            // Replay any pre-logger migration failures now that the log
+            // plugin is up. On Windows packaged builds this is the only
+            // path that reaches the user (no stderr console attached).
+            for warning in &deferred_migration_warnings {
+                log::warn!("{warning}");
+            }
+
             // History needs an on-disk home before any scan starts. Prefer
             // the friendly resolver (`<base>/JLab`) so the user-visible
             // folder is decoupled from the bundle identifier. Fall back to
