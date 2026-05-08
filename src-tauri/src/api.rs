@@ -810,8 +810,13 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
                     .as_secs();
                 let rotated = path.with_file_name(format!("debug-cleared-{stamp}.log"));
                 if std::fs::rename(&path, &rotated).is_ok() {
-                    let _ = std::fs::remove_file(&rotated);
-                    bytes_freed += size;
+                    match std::fs::remove_file(&rotated) {
+                        Ok(()) => bytes_freed += size,
+                        Err(e) => log::warn!(
+                            "rotated active log to {} but could not unlink: {e}",
+                            redact_path(&rotated.to_string_lossy())
+                        ),
+                    }
                     truncated += 1;
                     continue;
                 }
