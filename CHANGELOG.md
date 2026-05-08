@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-05-07
+## [0.4.0] - 2026-05-08
 
 ### Added
 
@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Severity histogram and threat-score bars animate via `transform: scaleX` instead of `transition-[width]`, so they no longer trigger Recalculate Style + Layout for the full duration window. CLAUDE.md already required transform-only animations; this brings the two outliers into line. (#41, #50)
 - Capability set drops `dialog:default` and keeps only `dialog:allow-open`. The frontend never imports `ask`, `confirm`, `message`, or `save` from the dialog plugin, so the bundled defaults were dead capability surface. (#40, #49)
 - CLAUDE.md, SECURITY.md, and README.md now describe the webview CSP as `connect-src ipc: http://ipc.localhost`, matching the actual policy in `tauri.conf.json`. Both sources are Tauri 2's IPC handler; dropping the second one breaks `invoke()`. CLAUDE.md also surfaces `script-src 'self'` and `img-src ... http://asset.localhost` so the full picture is documented in one place. Docs only, no runtime change. (#47, #56)
+- `open_log_dir` now goes through `tauri-plugin-opener` (`OpenerExt::open_path`) instead of the per-OS `Command::new` branch (`open` / `explorer` / `xdg-open`). Same shape as the existing `open_url` path, so the two "open something on disk or on the web" commands now share one platform call. Adds `opener:allow-open-path` to the capability set. No shell quoting in the path anymore. (#63, #73)
+- `SECURITY.md` "Hardening already in place" now lists every permission from `src-tauri/capabilities/default.json` (core defaults, window, event, internal devtools toggle, `dialog:allow-open`, `log:default`, `opener:allow-open-url`, `opener:allow-open-path`) and points at the JSON file as the source of truth. The earlier prose only named "dialog, log, window, internal devtools toggle", which under-described the actual scope. (#64, #72)
 
 ### Fixed
 
@@ -27,11 +29,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `HistoryEntry.id` no longer collides when the same file is scanned twice in the same millisecond. The id now appends a process-local `AtomicU64` sequence, so `history_delete` can no longer remove two rows on a single click. `delete` also warns when more than one row matches an id, so a future regression is visible in the log. (#44, #53)
 - A `history.json` written by a future build (schema version greater than the current `SCHEMA_VERSION`) is now moved aside to `history.json.future` and the older build starts with an empty file, instead of silently deserializing the future file and writing it back as v1 with new fields stripped. Adds a regression test that writes a v999 file and asserts the move-aside path. (#45, #54)
 - "Clear logs" no longer leaves the active `debug.log` NUL-padded on disk on Unix. The active log is renamed to `debug-cleared-<unix-secs>.log` and unlinked; `tauri-plugin-log` keeps writing into the orphaned inode (which goes away when the process exits) and the next log line lands in a freshly-created `debug.log`. Windows keeps the in-place truncate as a fallback because the OS rejects rename-while-open; the upstream fix there waits on a `rotate_now()` API in `tauri-plugin-log`. (#43, #52)
+- "Clear logs" no longer over-reports `bytes_freed` on Unix when the rotated log cannot be unlinked. The discarded `let _ = remove_file(...)` is now a `match` that only adds to the running total on a successful unlink and emits a `warn!` with the redacted path and OS error on failure. The truncate fallback gained the redacted path on its warning for the same diagnostic shape. `truncated += 1` still runs on rotation success. (#62, #75)
+- Pre-logger migration failures on Windows packaged builds are now visible. They were buffered into a `Vec<String>` and replayed via `log::warn!` from inside the `setup` callback, after the log plugin is initialized. Earlier the path went through `eprintln!`, which has no console on `windows_subsystem = "windows"`, so a failed legacy folder migration produced no signal at all. The user now sees a line in `debug.log`. (#60, #76)
 
 ### Security
 
 - The data dir is now locked to `0o700` on Unix on every code path (the platform `app_data_dir` in addition to the `/tmp` fallback that already had it), and `history.json` itself is chmodded to `0o600` after every atomic write. Previously the platform path inherited the home-directory mode, which on Fedora and openSUSE defaults to `0o755`, leaving scan filenames and SHA-256s readable to other local users. Defense in depth on macOS (home is 0o700) and Windows (per-user ACLs). SECURITY.md "Hardening already in place" updated to match. (#39, #51)
 - CI now gates merges on `npm audit --audit-level=high --omit=dev` alongside the existing `cargo audit` step. Closes the asymmetry where Dependabot proposed npm upgrade PRs but no merge gate existed on the JS tree. The two `cargo audit --ignore` entries (`RUSTSEC-2024-0429`, `RUSTSEC-2026-0097`) gained inline rationale so they are re-evaluated on every Tauri minor bump. (#42, #48)
+- Startup now refuses the `/tmp` fallback data dir if a hostile pre-existing entry was placed at the path. After `create_dir_all` and `chmod`, a new `verify_fallback_dir_security` helper uses `symlink_metadata` (rejects symlinks), then asserts `euid == st_uid` and `mode & 0o777 == 0o700`. The chmod warning alone was not enough because `chmod` silently fails on attacker-owned dirs (only the owner can change the mode, so a 0o755 dir owned by another user stays 0o755). Aborts startup on failure with `AppError::Io { message }` so the existing UI error path renders the failure. Four tests cover accept (self-owned 0o700), reject loose mode, reject missing path, reject symlink. (#59, #77)
+- `is_github_repo_url` now rejects owner / repo segments with a leading `.`, trailing `.`, or consecutive `..`, matching GitHub's own naming rules. No live exploit (those URLs already 404 on GitHub today), purely a hardening alignment so the allowlist cannot be tightened later by GitHub without breaking us. Four new reject tests cover `.evil/.repo`, `evil./repo.`, `foo..bar/baz`, and `owner/foo..`. (#61, #74)
 
 ### Migration (Windows)
 
