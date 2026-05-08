@@ -832,7 +832,10 @@ pub fn clear_logs(app: AppHandle) -> Result<u64, AppError> {
                     truncated += 1;
                 }
                 Err(e) => {
-                    log::warn!("could not truncate active log: {e}");
+                    log::warn!(
+                        "could not truncate active log {}: {e}",
+                        redact_path(&path.to_string_lossy())
+                    );
                 }
             }
             continue;
