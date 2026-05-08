@@ -900,6 +900,9 @@ fn is_github_repo_url(url: &str) -> bool {
         !s.is_empty()
             && s != "."
             && s != ".."
+            && !s.starts_with('.')
+            && !s.ends_with('.')
+            && !s.contains("..")
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
     };
@@ -1311,6 +1314,12 @@ mod tests {
         // path traversal-ish
         assert!(!is_github_repo_url("https://github.com/../repo"));
         assert!(!is_github_repo_url("https://github.com/owner/.."));
+        // dot-edge segments: GitHub's own rules forbid these shapes,
+        // so the validator should match. See issue #61.
+        assert!(!is_github_repo_url("https://github.com/.evil/.repo"));
+        assert!(!is_github_repo_url("https://github.com/evil./repo."));
+        assert!(!is_github_repo_url("https://github.com/foo..bar/baz"));
+        assert!(!is_github_repo_url("https://github.com/owner/foo.."));
         // disallowed chars
         assert!(!is_github_repo_url("https://github.com/own er/repo"));
     }
