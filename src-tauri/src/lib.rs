@@ -47,6 +47,58 @@ fn fallback_data_dir() -> PathBuf {
     p
 }
 
+/// Effective user id of the current process. POSIX `geteuid` is thread-safe
+/// and has no preconditions, so a tiny `extern "C"` declaration is enough
+/// to avoid pulling in `libc` as a direct dependency for this single call.
+/// `uid_t` is `u32` on Linux, macOS, and FreeBSD, which are the platforms
+/// this build targets.
+#[cfg(unix)]
+fn current_euid() -> u32 {
+    extern "C" {
+        fn geteuid() -> u32;
+    }
+    // SAFETY: geteuid is async-signal-safe and always succeeds.
+    unsafe { geteuid() }
+}
+
+/// Verify that the per-user `/tmp` fallback dir is owned by us and locked
+/// to mode 0o700. The fallback path lives in a world-writable directory, so
+/// without this check a local attacker can pre-create the path under their
+/// own ownership; chmod then fails with EPERM (only the owner can chmod) and
+/// the app would otherwise keep writing to a directory the attacker controls.
+///
+/// `symlink_metadata` is used so a pre-placed symlink is rejected as "not a
+/// directory" rather than being followed to its target. The reason is
+/// returned as `AppError::Io` so existing UI surfaces render it without a
+/// new typed variant. (#59)
+#[cfg(unix)]
+fn verify_fallback_dir_security(path: &std::path::Path) -> Result<(), error::AppError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let display = path.to_string_lossy();
+    let unsafe_err = |reason: String| error::AppError::Io {
+        message: format!("refusing fallback data dir {display}: {reason}"),
+    };
+    let meta =
+        std::fs::symlink_metadata(path).map_err(|e| unsafe_err(format!("stat failed: {e}")))?;
+    if !meta.file_type().is_dir() {
+        return Err(unsafe_err(
+            "not a directory (symlink or other file type)".into(),
+        ));
+    }
+    let owner = meta.uid();
+    let euid = current_euid();
+    if owner != euid {
+        return Err(unsafe_err(format!(
+            "owner uid {owner} does not match effective uid {euid}"
+        )));
+    }
+    let mode = meta.permissions().mode() & 0o777;
+    if mode != 0o700 {
+        return Err(unsafe_err(format!("mode 0o{mode:o} is not 0o700")));
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let http = reqwest::Client::builder()
@@ -177,6 +229,23 @@ pub fn run() {
                     }
                 }
             }
+            // The `/tmp` fallback lives in a world-writable directory, so an
+            // attacker can pre-create the per-user path before launch. chmod
+            // then silently fails (only the owner can chmod) and we would
+            // otherwise keep writing to a directory the attacker controls.
+            // Refuse the fallback unless we own it and it is locked to 0o700.
+            // (#59)
+            #[cfg(unix)]
+            if used_fallback {
+                if let Err(e) = verify_fallback_dir_security(&data_dir) {
+                    log::error!(
+                        "{}: refusing to use fallback data dir {}",
+                        e,
+                        api::redact_path(&data_dir.to_string_lossy())
+                    );
+                    return Err(Box::new(e));
+                }
+            }
             app.manage(history::HistoryStore::new(data_dir));
             let log_dir = friendly_log
                 .clone()
@@ -243,6 +312,70 @@ mod tests {
         let s = sanitize_username(&long);
         assert_eq!(s.len(), 32);
         assert!(s.chars().all(|c| c == 'a'));
+    }
+
+    #[cfg(unix)]
+    fn unique_tempdir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let mut p = std::env::temp_dir();
+        p.push(format!("jlab-verify-{tag}-{pid}-{n}"));
+        p
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_fallback_dir_accepts_self_owned_0o700() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = unique_tempdir("ok");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = verify_fallback_dir_security(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.is_ok(), "expected ok, got {result:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_fallback_dir_rejects_loose_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = unique_tempdir("loose");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let result = verify_fallback_dir_security(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = result.expect_err("expected mode rejection");
+        let msg = err.to_string();
+        assert!(msg.contains("mode"), "unexpected error: {msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_fallback_dir_rejects_missing_path() {
+        let dir = unique_tempdir("missing");
+        let result = verify_fallback_dir_security(&dir);
+        let err = result.expect_err("expected stat rejection");
+        let msg = err.to_string();
+        assert!(msg.contains("stat failed"), "unexpected error: {msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_fallback_dir_rejects_symlink() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let target = unique_tempdir("symtarget");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let link = unique_tempdir("symlink");
+        symlink(&target, &link).unwrap();
+        let result = verify_fallback_dir_security(&link);
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&target);
+        let err = result.expect_err("expected symlink rejection");
+        let msg = err.to_string();
+        assert!(msg.contains("not a directory"), "unexpected error: {msg}");
     }
 
     #[test]
