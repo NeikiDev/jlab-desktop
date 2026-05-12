@@ -269,29 +269,35 @@ fn extract_largest_jar_from_reader<R: std::io::Read + std::io::Seek>(
     Ok((buf, inner_name, jar_count))
 }
 
+/// Tracks every in-flight scan so `cancel_scan` can cancel all of them.
+///
+/// The previous design stored a single `Option<Arc<Notify>>`, so a second
+/// `scan_jar` call would overwrite the first token and the earlier scan
+/// could no longer be cancelled (#66). The UI today only launches one scan
+/// at a time, but the folder watcher and any scripted Tauri harness can
+/// trigger concurrent calls. We now keep one token per job and signal them
+/// all on cancel.
 #[derive(Default)]
 pub struct ScanJobs {
-    cancel: Mutex<Option<Arc<Notify>>>,
+    cancel: Mutex<Vec<Arc<Notify>>>,
 }
 
 impl ScanJobs {
     fn install(&self, token: &Arc<Notify>) {
         if let Ok(mut g) = self.cancel.lock() {
-            *g = Some(token.clone());
+            g.push(token.clone());
         }
     }
 
     fn clear_if_current(&self, token: &Arc<Notify>) {
         if let Ok(mut g) = self.cancel.lock() {
-            if g.as_ref().map(|c| Arc::ptr_eq(c, token)).unwrap_or(false) {
-                *g = None;
-            }
+            g.retain(|c| !Arc::ptr_eq(c, token));
         }
     }
 
     fn signal(&self) {
         if let Ok(g) = self.cancel.lock() {
-            if let Some(c) = g.as_ref() {
+            for c in g.iter() {
                 c.notify_waiters();
             }
         }
