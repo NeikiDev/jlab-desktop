@@ -535,12 +535,47 @@ pub async fn run_scan(
         );
         (extracted, inner_name)
     } else {
-        // Plain `.jar`: we still need the bytes in memory to compute sha256
-        // and build the multipart upload, so the buffered read stays.
+        // Plain `.jar`: stream the file through a blocking task so the 4-byte
+        // zip magic check happens before the full read (#68). The previous
+        // path called `tokio::fs::read` first and only then checked magic, so
+        // a renamed text file paid a 50 MB read before getting a typed error.
+        // The `take(MAX_BYTES + 1)` bound is defense in depth in case the
+        // file grew between the metadata size check and the read (TOCTOU,
+        // #82). We still need the bytes in memory to compute sha256 and
+        // build the multipart upload.
+        let path_owned = path.clone();
+        let ext_for_err = ext.clone();
+        let cap_bytes = size.min(MAX_BYTES) as usize;
         let raw_bytes = tokio::select! {
             biased;
             _ = cancel.notified() => return Err(AppError::Cancelled),
-            res = tokio::fs::read(p) => res?,
+            res = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut f = std::fs::File::open(&path_owned)
+                    .map_err(|e| AppError::Io { message: e.to_string() })?;
+                let mut header = [0u8; 4];
+                if f.read_exact(&mut header).is_err() || !has_zip_magic(&header) {
+                    return Err(AppError::UnsupportedFile {
+                        extension: ext_for_err,
+                        allowed: allowed_exts(),
+                    });
+                }
+                f.seek(SeekFrom::Start(0))
+                    .map_err(|e| AppError::Io { message: e.to_string() })?;
+                let mut buf = Vec::with_capacity(cap_bytes);
+                (&mut f)
+                    .take(MAX_BYTES + 1)
+                    .read_to_end(&mut buf)
+                    .map_err(|e| AppError::Io { message: e.to_string() })?;
+                if buf.len() as u64 > MAX_BYTES {
+                    return Err(AppError::TooLarge {
+                        max_mb: MAX_BYTES / (1024 * 1024),
+                    });
+                }
+                Ok(buf)
+            }) => {
+                res.map_err(|e| AppError::Io { message: format!("read task: {e}") })??
+            },
         };
         log::debug!(
             "read {} bytes from disk in {}ms fingerprint={}",
@@ -548,12 +583,6 @@ pub async fn run_scan(
             read_started.elapsed().as_millis(),
             fingerprint(&raw_bytes)
         );
-        if !has_zip_magic(&raw_bytes) {
-            return Err(AppError::UnsupportedFile {
-                extension: ext.clone(),
-                allowed: allowed_exts(),
-            });
-        }
         emit_phase(
             app,
             source,
