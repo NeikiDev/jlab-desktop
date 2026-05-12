@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `tokio` from 1.52.1 to 1.52.3 (patch). No code changes required. `cargo check` and `cargo clippy -D warnings` stay green. (#71)
+
 ### Security
 
 - Bumped `tauri` to 2.11.1 (and `tauri-build` to 2.6.1) to pick up the upstream fix for CVE-2026-42184. No code changes required. (#80)
