@@ -6,13 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-12
+
+### Added
+
+- Opt-in folder watcher. Pick one or more local folders and JLab scans every `.jar` that lands in them, with a single-consumer rate-limited queue (12 req / min, 3 under the public API's 15 / min cap so manual drags still go through), hold-until-scanned renames (`foo.jar` → `foo.jar.jlab-pending` while the scan runs, recovered on next launch if the process dies mid-scan), optional auto-action (off / multiple criticals / confirmed families only) with two modes (recoverable quarantine under `<data_dir>/quarantine/` or OS trash), coalesced native notifications, a system-tray icon with open / pause / quit, `launch_at_login` via `tauri-plugin-autostart` reconciled against OS state on every startup, minimize-to-tray behavior, and a stale-scan rescheduler that re-queues entries every 6 hours on a 7 / 14 / 30 day ladder. All watcher work reuses the manual `scan_jar` pipeline through a shared `run_scan` helper, so the same magic-byte checks, container handling, and rate-limit treatment apply. Settings live in `watcher-settings.json` next to `history.json` with `serde(default)` on additive fields and an alias from the previous `autoDelete` name so older files migrate cleanly. New capabilities: `core:tray:default`, `notification:default` (plus `allow-notify`, `allow-permission-state`, `allow-request-permission`), and `autostart:allow-enable` / `allow-disable` / `allow-is-enabled`. New Rust modules under `src-tauri/src/watcher/` and new frontend components (`WatcherPanel`, `WatcherStatusCard`, `WatcherFoldersList`, `WatcherSettingsList`, `WatcherFirstEnableModal`, `WatcherIcons`).
+- `@fontsource-variable/geist` and `@fontsource-variable/geist-mono` are now bundled and self-hosted, so the UI ships with its intended typography without a network call. The new CSP entry `font-src 'self'` keeps loading these woff2 assets after the `default-src 'none'` tightening below.
+
 ### Changed
 
-- Bumped `tokio` from 1.52.1 to 1.52.3 (patch). No code changes required. `cargo check` and `cargo clippy -D warnings` stay green. (#71)
+- Bumped `tokio` from 1.52.1 to 1.52.3 (patch). No code changes required. (#71)
+- Bumped `react` and `react-dom` from 19.2.5 to 19.2.6, `@tailwindcss/vite` and `tailwindcss` from 4.2.4 to 4.3.0, `@tauri-apps/cli` from 2.11.0 to 2.11.1, `@types/node` from 25.6.0 to 25.6.2, and `vite` from 8.0.10 to 8.0.12. Lockfile-only refresh, no code changes. (#87)
+- Shared `reqwest::Client` request timeout raised from 60 seconds to 300 seconds. The 60-second budget was tight for legitimate 50 MB uploads on slow links, where the multipart body alone could take longer than that. Manual `Client::builder` timeouts stay where they are; this only widens the global default that scan uploads inherit. (#69)
+- `CHANGELOG.md` `0.2.0` Changed section now spells the RatterScanner field as `automated_safe` to match the actual server response shape. The previous `automatedSafe` rendering was inconsistent with the rest of the API contract. (#81)
+- `default.json` capability set grew to cover the new watcher subsystem (tray, notifications, autostart). The non-watcher entries (window, event, dialog, log, opener) are unchanged.
+
+### Fixed
+
+- `cancel_scan` now signals every in-flight scan, not just the most recently started one. The previous `Option<Arc<Notify>>` slot was overwritten when a second `scan_jar` call started, so the first scan could no longer be cancelled. `ScanJobs` now holds a `Vec<Arc<Notify>>` and broadcasts the notify to every entry on cancel. The UI only fires one scan at a time today, but the folder watcher and any scripted Tauri harness can drive concurrent scans, and the regression would have been silent. (#66)
+- Pre-logger migration now only touches files that match `debug*.log`, not every name that ends in `.log`. The earlier scan would have moved any unrelated `.log` files dropped into the legacy `JLAB-Desktop` folder, including ones a user kept there on purpose. The new check matches both `debug.log` and the rotated `debug.YYYY-MM-DD.log` names that `tauri-plugin-log` writes, and leaves anything else alone. (#65)
+- Plain `.jar` uploads run the 4-byte zip magic check before reading the full file, not after. The previous path called `tokio::fs::read` on the input and only then checked the header, so a renamed text file paid the full 50 MB read before getting `AppError::UnsupportedFile`. The read now happens inside `tokio::task::spawn_blocking` with `Read::take(MAX_BYTES + 1)` so the magic byte gate runs first and the upload size is bounded as defense in depth against TOCTOU between the metadata `size` check and the read. (#68)
+- Scan response body is parsed once via `serde_json::from_slice` instead of being read with `Response::text()` and then re-parsed with `serde_json::from_str`. The earlier path allocated the body twice and forced a UTF-8 validation pass that the JSON parser was about to do anyway. (#84)
 
 ### Security
 
 - Bumped `tauri` to 2.11.1 (and `tauri-build` to 2.6.1) to pick up the upstream fix for CVE-2026-42184. No code changes required. (#80)
+- CSP tightened. `default-src` is now `'none'` (was `'self'`) and `frame-ancestors 'none'` is added, so any directive the policy does not explicitly list is denied by default and the window cannot be embedded as a frame target. The four existing per-directive entries (`img-src`, `style-src`, `script-src`, `connect-src`) keep their previous allowlists, and a new `font-src 'self'` is added so the bundled Geist woff2 assets keep loading. (#70)
+- Outbound response bodies are now streamed through a `read_capped` helper that refuses to grow past per-call-site limits. Caps are 64 MB for scan responses, 1 MB for the threat-intel call, and 1 MB for the GitHub releases lookup. A declared `Content-Length` over the cap is rejected before the first chunk is buffered; chunked or unknown-length responses are rejected as soon as the cumulative buffer would cross the cap. Defense in depth: a hijacked or misbehaving server can no longer push multi-GB bodies into memory. (#67)
+- `release.yml` no longer interpolates the `workflow_dispatch` inputs directly into shell commands. `inputs.tag_name`, `inputs.release_name`, and `inputs.draft` are passed through `env:` and dereferenced from there, closing a shell-injection vector where a maintainer with permission to trigger the workflow could otherwise inject arbitrary commands via the input fields. (#79)
 
 ## [0.4.0] - 2026-05-08
 
@@ -136,7 +157,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 The first public release. Initial macOS (universal) and Windows (MSI) builds.
 
-[Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.5.0
 [0.4.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.4.0
 [0.3.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.3.0
 [0.2.1]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.2.1
