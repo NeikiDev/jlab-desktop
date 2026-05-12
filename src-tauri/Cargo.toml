@@ -1,6 +1,6 @@
 [package]
 name = "jlab-desktop"
-version = "0.5.1"
+version = "0.5.2"
 description = "Cross-platform desktop client for the JLab static JAR scanner API"
 authors = ["JLab Desktop Contributors"]
 license = "MIT OR Apache-2.0"
@@ -36,6 +36,19 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 notify-debouncer-full = { version = "0.5", default-features = false, features = ["macos_fsevent"] }
 walkdir = "2"
 trash = "5"
+
+# Desktop-only: stop a second JLab process from launching when the user
+# clicks the shortcut twice. The callback in `lib.rs` focuses the existing
+# window instead. Without this, two processes would both poll
+# `watcher-settings.json` and clobber each other's atomic writes.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+# Windows-only: register our AppUserModelID in HKCU and bind it to the
+# current process so the Action Center will actually draw our toasts. See
+# `src/windows_aumid.rs` for the why.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Registry", "Win32_UI_Shell", "Win32_Foundation"] }
 
 [profile.release]
 panic = "abort"
