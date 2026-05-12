@@ -714,17 +714,11 @@ pub async fn run_scan(
                 started.elapsed().as_millis()
             );
 
-            // Parse straight from the `Bytes` buffer. `String::from_utf8`
-            // on `body.to_vec()` used to make a second full copy and held
-            // both the `Vec<u8>` and the resulting `String` alive at the
-            // same time. `str::from_utf8` only borrows, keeping the peak
-            // at one body buffer.
-            let text = std::str::from_utf8(&body).map_err(|e| {
-                log::error!("body is not valid UTF-8: {e}");
-                AppError::InvalidResponse {
-                    message: format!("non-utf8 body: {e}"),
-                }
-            })?;
+            // Parse straight from the `Bytes` buffer. `serde_json::from_slice`
+            // validates UTF-8 inside string fields itself, so an explicit
+            // `from_utf8` pass is redundant. Skipping it removes a second
+            // walk over the body and keeps the peak allocation at one buffer
+            // plus the parsed `Value`.
             emit_phase(
                 app,
                 source,
@@ -734,10 +728,12 @@ pub async fn run_scan(
                 Some(format!("{body_len} bytes")),
             );
 
-            let scan_value: serde_json::Value =
-                serde_json::from_str(text).map_err(|e| AppError::InvalidResponse {
+            let scan_value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+                log::error!("scan body parse failed: {e}");
+                AppError::InvalidResponse {
                     message: format!("scan json: {e}"),
-                })?;
+                }
+            })?;
 
             // Persist a small history entry on the side. We never fail the
             // scan if disk IO is misbehaving: log and move on so the user
