@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-12
+
+### Added
+
+- Test notification button in the watcher settings, on the Notifications tile. Sends one toast immediately, bypassing the alert threshold and the coalescing window, so the user can confirm that the OS is willing to draw notifications for JLab. On Windows the plugin reports success even when the OS suppresses the toast (Focus assist, per-app toggle, missing AUMID registration), so the button is a diagnostic, not a guarantee.
+
+### Changed
+
+- Watcher rate limiter spaces scans evenly across the 12 / minute budget instead of bursting. Previously the sliding window let the first 12 events kick off back to back, then sat idle until the oldest fell off. Each scan now waits at least `60s / 12 = 5s` since the previous one started before kicking off, on top of the existing window check. The cap is unchanged.
+- Folder watcher dashboard card on the idle screen lays out across the full width when it sits below the drop zone (windows narrower than the `lg` breakpoint). Stats and the settings summary now fill the row instead of the card staying sized for the 320 px sidebar slot.
+
+### Fixed
+
+- New `.jar` files in a watched folder are renamed to `<name>.jlab-pending` the moment the qualifier accepts them, not when the consumer picks them up. Dropping five jars at once now neuters all five immediately. Previously four of them stayed at their original names (and could be loaded by Java launchers) while sitting in the rate-limited queue.
+- The hold suffix no longer leaks into quarantined or trashed file names. Auto-action restores the original name before moving the file, so `<ts>-foo.jar.quarantined` is written instead of `<ts>-foo.jar.jlab-pending.quarantined`.
+
 ## [0.5.0] - 2026-05-12
 
 ### Added

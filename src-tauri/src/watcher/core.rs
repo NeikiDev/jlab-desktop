@@ -357,8 +357,15 @@ impl WatcherStore {
         s.baseline.retain(|p, _| !p.starts_with(path));
     }
 
-    /// Returns the qualifying canonical path if this event should be
-    /// queued for a scan. Filters by extension and the baseline.
+    /// Returns the qualifying path if this event should be queued for a
+    /// scan. Filters by extension and the baseline.
+    ///
+    /// When `hold_until_scanned` is on, the file is renamed to add the
+    /// `.jlab-pending` suffix here, before being enqueued, so a batch of
+    /// freshly dropped jars all get neutered the moment they arrive (even
+    /// the ones that will sit in the queue for minutes behind the token
+    /// bucket). The returned path is the suffixed one; the consumer's
+    /// `process_one` recognises the suffix and skips its own rename.
     fn qualify_event_path(&self, raw_path: PathBuf) -> Option<PathBuf> {
         let ext = raw_path
             .extension()
@@ -380,17 +387,34 @@ impl WatcherStore {
         let size = meta.len();
         let canon = raw_path.canonicalize().unwrap_or_else(|_| raw_path.clone());
 
-        let mut s = self.inner.state.lock().unwrap();
-        let is_new_or_changed = match s.baseline.get(&canon) {
-            None => true,
-            Some(base) => base.mtime != mtime || base.size != size,
+        let hold_enabled = {
+            let mut s = self.inner.state.lock().unwrap();
+            let is_new_or_changed = match s.baseline.get(&canon) {
+                None => true,
+                Some(base) => base.mtime != mtime || base.size != size,
+            };
+            if !is_new_or_changed {
+                return None;
+            }
+            s.baseline
+                .insert(canon.clone(), BaselineEntry { mtime, size });
+            s.settings.hold_until_scanned
         };
-        if !is_new_or_changed {
-            return None;
+
+        if hold_enabled {
+            match hold::rename_to_pending(&canon) {
+                Ok(pending) => Some(pending),
+                Err(e) => {
+                    log::warn!(
+                        "watcher pre-hold rename failed for {}: {e}; queuing original path",
+                        crate::api::redact_path(&canon.to_string_lossy())
+                    );
+                    Some(canon)
+                }
+            }
+        } else {
+            Some(canon)
         }
-        s.baseline
-            .insert(canon.clone(), BaselineEntry { mtime, size });
-        Some(canon)
     }
 
     /// Enqueue a path for the consumer to scan, bypassing the baseline
@@ -505,6 +529,12 @@ async fn consumer_loop(
 ) {
     let mut last_minute: Vec<Instant> = Vec::with_capacity(16);
     let cap = WATCHER_REQUESTS_PER_MINUTE as usize;
+    // Minimum spacing between scans. Spreads the watcher's 12 / minute
+    // budget evenly instead of bursting all 12 in the first few seconds and
+    // then waiting 50s, which would look like a stall to the user and
+    // hammer the API in short windows.
+    let min_spacing = Duration::from_secs(60) / WATCHER_REQUESTS_PER_MINUTE;
+    let mut last_started: Option<Instant> = None;
 
     loop {
         tokio::select! {
@@ -516,10 +546,24 @@ async fn consumer_loop(
             maybe_path = rx.recv() => {
                 let Some(path) = maybe_path else { return };
 
-                // Token bucket. Drop expired entries, then if we are at the
-                // cap wait until the oldest falls off. The file stays
-                // counted in the visible queue depth during this wait so
-                // the UI keeps showing "queued" instead of going idle.
+                // Smooth spacing: wait until at least `min_spacing` has
+                // elapsed since the previous scan kicked off.
+                if let Some(prev) = last_started {
+                    let elapsed = prev.elapsed();
+                    if elapsed < min_spacing {
+                        let wait = min_spacing - elapsed;
+                        tokio::select! {
+                            biased;
+                            _ = kill.notified() => return,
+                            _ = tokio::time::sleep(wait) => {},
+                        }
+                    }
+                }
+
+                // Sliding-window safety net on top of the spacing above:
+                // drop entries older than 60s, and if we are still at the
+                // cap (e.g. after a long process_one), block until the
+                // oldest falls off.
                 let now = Instant::now();
                 last_minute.retain(|t| now.duration_since(*t) < Duration::from_secs(60));
                 if last_minute.len() >= cap {
@@ -533,6 +577,7 @@ async fn consumer_loop(
                     last_minute.retain(|t| now2.duration_since(*t) < Duration::from_secs(60));
                 }
                 last_minute.push(Instant::now());
+                last_started = Some(Instant::now());
 
                 // Only decrement once we are about to start the scan so
                 // the queue counter and run state stay accurate during
@@ -549,16 +594,30 @@ async fn consumer_loop(
 
 async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathBuf) {
     let settings = store.snapshot_settings();
-    let display_name = original_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file")
-        .to_string();
 
-    let hold_active =
-        settings.hold_until_scanned && !original_path.to_string_lossy().ends_with(HOLD_SUFFIX);
+    // The qualifier may have already renamed new arrivals to `.jlab-pending`
+    // so a batch of dropped jars gets held even while they sit in the queue.
+    // Detect that, plus the regular case where this function does the rename
+    // itself if hold-until-scanned is on.
+    let entered_with_hold = original_path.to_string_lossy().ends_with(HOLD_SUFFIX);
+    let needs_hold_now = settings.hold_until_scanned && !entered_with_hold;
 
-    let scan_path = if hold_active {
+    // The display name should always be the user-facing one (no internal
+    // suffix), regardless of which path the file came in on.
+    let display_name = {
+        let stripped = original_path
+            .to_string_lossy()
+            .strip_suffix(HOLD_SUFFIX)
+            .map(std::path::PathBuf::from);
+        let logical = stripped.as_ref().unwrap_or(&original_path);
+        logical
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string()
+    };
+
+    let scan_path = if needs_hold_now {
         match hold::rename_to_pending(&original_path) {
             Ok(p) => p,
             Err(e) => {
@@ -576,6 +635,8 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
     } else {
         original_path.clone()
     };
+
+    let is_held = entered_with_hold || needs_hold_now;
 
     store.set_scanning(Some(display_name.clone()));
     emit_event(
@@ -606,6 +667,17 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
                 above_action && !matches!(settings.auto_action, ActionThreshold::Off);
 
             if action_enabled {
+                // Strip the hold suffix before the action so the quarantined
+                // or trashed file does not keep our internal `.jlab-pending`
+                // marker baked into its filename.
+                if is_held {
+                    match hold::rename_from_pending(&final_path) {
+                        Ok(restored) => final_path = restored,
+                        Err(e) => log::warn!(
+                            "restore before auto-action failed: {e}; proceeding with held name"
+                        ),
+                    }
+                }
                 let data_dir = store.data_dir();
                 let (result, label) = match settings.auto_action_mode {
                     ActionMode::Quarantine => (
@@ -635,19 +707,9 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
                                 message: e.to_string(),
                             },
                         );
-                        // The action failed. If we were holding the file
-                        // with .jlab-pending, restore the original name so
-                        // the user does not end up with a stranded suffix.
-                        if hold_active {
-                            if let Err(re) = hold::rename_from_pending(&final_path) {
-                                log::warn!("restore from hold failed: {re}");
-                            } else {
-                                final_path = original_path.clone();
-                            }
-                        }
                     }
                 }
-            } else if hold_active {
+            } else if is_held {
                 // No action: restore the original name from the hold suffix.
                 match hold::rename_from_pending(&final_path) {
                     Ok(restored) => final_path = restored,
@@ -701,7 +763,7 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
                 "watcher scan failed for {}: {e}",
                 crate::api::redact_path(&scan_path.to_string_lossy())
             );
-            if hold_active {
+            if is_held {
                 if let Err(re) = hold::rename_from_pending(&scan_path) {
                     log::warn!("restore from hold after failure failed: {re}");
                 }

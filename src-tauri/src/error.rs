@@ -56,7 +56,6 @@ pub enum AppError {
     WatcherDisabled,
 
     #[error("notifications were not permitted by the operating system")]
-    #[allow(dead_code)]
     NotificationDenied,
 }
 

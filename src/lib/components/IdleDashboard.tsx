@@ -157,6 +157,7 @@ export default function IdleDashboard({
           folders={watcherFolders}
           currentFile={watcherCurrent}
           queueDepth={watcherQueue}
+          stacked
           onClick={onShowWatcher}
         />
       </div>
@@ -278,6 +279,7 @@ function WatcherCard({
   folders,
   currentFile,
   queueDepth,
+  stacked,
   onClick,
 }: {
   settings: WatcherSettings | null;
@@ -286,6 +288,7 @@ function WatcherCard({
   folders: number;
   currentFile: string | null;
   queueDepth: number;
+  stacked?: boolean;
   onClick: () => void;
 }) {
   const statusText =
@@ -336,21 +339,59 @@ function WatcherCard({
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <MiniStat label="Folders" value={folders} />
-        <MiniStat label="In queue" value={queueDepth} />
+      {stacked ? (
+        // Full-width layout used when the card sits below the drop zone on
+        // narrow windows. Stats sit next to the settings summary so the row
+        // actually fills the width.
+        <div className="flex flex-col gap-4 lg:hidden">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <MiniStat label="Folders" value={folders} />
+            <MiniStat label="In queue" value={queueDepth} />
+            <MiniStat
+              label="Notify"
+              value={settings?.notificationsEnabled ? "On" : "Off"}
+            />
+            <MiniStat
+              label="Auto-action"
+              value={
+                settings
+                  ? settings.autoAction === "off"
+                    ? "Off"
+                    : settings.autoActionMode === "trash"
+                      ? "Trash"
+                      : "Quar"
+                  : "—"
+              }
+            />
+          </div>
+          {currentFile && (
+            <p
+              className="m-0 truncate font-mono text-[12.5px] text-text-dim"
+              title={currentFile}
+            >
+              {currentFile}
+            </p>
+          )}
+          <SettingsSummary settings={settings} dim={!enabled} />
+        </div>
+      ) : null}
+
+      {/* Sidebar layout used at lg+. Same content stacked vertically. */}
+      <div className={cn("flex flex-col gap-4", stacked ? "hidden lg:flex" : "flex")}>
+        <div className="grid grid-cols-2 gap-3">
+          <MiniStat label="Folders" value={folders} />
+          <MiniStat label="In queue" value={queueDepth} />
+        </div>
+        {currentFile && (
+          <p
+            className="m-0 truncate font-mono text-[12.5px] text-text-dim"
+            title={currentFile}
+          >
+            {currentFile}
+          </p>
+        )}
+        <SettingsSummary settings={settings} dim={!enabled} />
       </div>
-
-      {currentFile && (
-        <p
-          className="m-0 truncate font-mono text-[12.5px] text-text-dim"
-          title={currentFile}
-        >
-          {currentFile}
-        </p>
-      )}
-
-      <SettingsSummary settings={settings} dim={!enabled} />
 
       <CardCta label="Open watcher" />
     </button>
@@ -484,7 +525,13 @@ function SummaryRowItem({ icon, label, value, tone }: SummaryRow) {
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: number }) {
+function MiniStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | string;
+}) {
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[10.5px] uppercase tracking-[0.08em] text-text-dim">

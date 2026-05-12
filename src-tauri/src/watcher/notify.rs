@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::AppHandle;
-use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tokio::time::sleep;
 
+use crate::error::AppError;
 use crate::watcher::settings::WatcherSettings;
 
 #[derive(Clone, Debug, Serialize)]
@@ -102,12 +103,42 @@ fn post_notification(app: &AppHandle, hits: &[Hit]) {
         (title, body)
     };
 
-    let res = app
-        .notification()
+    show_native(app, &title, &body);
+}
+
+/// Send a single immediate notification, bypassing the coalescing buffer.
+/// Used by the "Send test notification" button in the settings UI.
+///
+/// On Windows the toast can still be suppressed by the OS (Focus assist,
+/// per-app notification toggle, missing Start Menu shortcut AUMID). The
+/// plugin returns Ok in that case, so success here means the call reached
+/// the OS, not that a toast was actually drawn.
+pub fn send_test_notification(app: &AppHandle) -> Result<(), AppError> {
+    let notif = app.notification();
+    if let Ok(state) = notif.permission_state() {
+        if matches!(state, PermissionState::Denied) {
+            return Err(AppError::NotificationDenied);
+        }
+        if matches!(
+            state,
+            PermissionState::Prompt | PermissionState::PromptWithRationale
+        ) {
+            let _ = notif.request_permission();
+        }
+    }
+    notif
         .builder()
-        .title(&title)
-        .body(&body)
-        .show();
+        .title("JLab notifications work")
+        .body("Test notification from the folder watcher.")
+        .show()
+        .map_err(|e| {
+            log::warn!("test notification failed: {e}");
+            AppError::NotificationDenied
+        })
+}
+
+fn show_native(app: &AppHandle, title: &str, body: &str) {
+    let res = app.notification().builder().title(title).body(body).show();
     if let Err(e) = res {
         log::warn!("native notification failed: {e}");
     }

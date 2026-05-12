@@ -360,6 +360,7 @@ pub fn run() {
             watcher::commands::watcher_open_quarantine_dir,
             watcher::commands::watcher_pick_folder,
             watcher::commands::watcher_reset_to_defaults,
+            watcher::commands::watcher_send_test_notification,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
