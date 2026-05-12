@@ -7,7 +7,7 @@
 
 Native desktop client for the public [JLab static JAR scanner](https://jlab.threat.rip). Drop a `.jar` (or a `.zip`, `.mcpack`, or `.mrpack` that contains one), the app uploads the file to the JLab API and shows the matched signatures grouped by severity. The HTTP upload runs in Rust, so no file bytes leak through the JavaScript layer.
 
-<img width="2584" height="1786" alt="image" src="https://github.com/user-attachments/assets/ef43889f-4608-4eda-a850-8fc6abc9d291" />
+<img width="2496" height="1698" alt="image" src="https://github.com/user-attachments/assets/31449022-386d-4de8-8200-fb91324f4391" />
 
 ## Features
 
