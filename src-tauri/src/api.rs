@@ -128,14 +128,11 @@ async fn fetch_threat_intel_body(resp: reqwest::Result<reqwest::Response>) -> se
         return serde_json::Value::Null;
     }
 
-    let bytes = match r.bytes().await {
+    let bytes = match read_capped(r, MAX_INTEL_BODY_BYTES).await {
         Ok(b) => b,
         Err(e) => {
             log::warn!(
-                "threat-intel body read failed: {} timeout={} body={} content-type={:?} content-encoding={:?}",
-                error_chain(&e),
-                e.is_timeout(),
-                e.is_body(),
+                "threat-intel body read failed: {e} content-type={:?} content-encoding={:?}",
                 content_type,
                 content_encoding,
             );
@@ -166,6 +163,52 @@ const CLIENT_HEADER: &str = "x-jlab-client";
 const CLIENT_VALUE: &str = "desktop";
 const MAX_BYTES: u64 = 50 * 1024 * 1024;
 const PHASE_EVENT: &str = "scan://phase";
+
+// Upper bounds on response body sizes (#67). The shared reqwest client has no
+// native body-size cap, so each call site streams chunks through `read_capped`
+// and rejects over-size responses with a typed error before any further
+// allocation. Caps are loose enough to avoid affecting the legitimate path
+// (scan manifests are kilobytes today, threat-intel and releases are smaller
+// still) but tight enough that a misbehaving or hijacked server cannot push
+// multi-GB bodies into memory.
+const MAX_SCAN_BODY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_INTEL_BODY_BYTES: usize = 1024 * 1024;
+const MAX_RELEASES_BODY_BYTES: usize = 1024 * 1024;
+
+/// Read a response body in chunks, refusing to grow past `max_bytes`.
+///
+/// Uses `reqwest::Response::chunk` (the crate's own streaming API) so we do
+/// not pull in `futures-util` just for `StreamExt::next`. A `Content-Length`
+/// larger than the cap fails before the first chunk is buffered.
+async fn read_capped(mut resp: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>, AppError> {
+    if let Some(declared) = resp.content_length() {
+        if declared > max_bytes as u64 {
+            return Err(AppError::InvalidResponse {
+                message: format!("response body declares {declared} bytes, cap is {max_bytes}"),
+            });
+        }
+    }
+    let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if buf.len().saturating_add(chunk.len()) > max_bytes {
+                    return Err(AppError::InvalidResponse {
+                        message: format!("response body exceeds {max_bytes} bytes"),
+                    });
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return Err(AppError::Network {
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+    Ok(buf)
+}
 
 const SUPPORTED_EXTS: &[&str] = &["jar", "zip", "mcpack", "mrpack"];
 const CONTAINER_EXTS: &[&str] = &["zip", "mcpack", "mrpack"];
@@ -699,13 +742,13 @@ pub async fn run_scan(
                 Some(format!("HTTP {}", status.as_u16())),
             );
             emit_phase(app, source, started, "parse", "running", None);
-            let body_fut = response.bytes();
+            let body_fut = read_capped(response, MAX_SCAN_BODY_BYTES);
             let body = tokio::select! {
                 biased;
                 _ = cancel.notified() => return Err(AppError::Cancelled),
                 res = body_fut => res.map_err(|e| {
                     log::error!("reading body failed: {e}");
-                    AppError::InvalidResponse { message: format!("read body: {e}") }
+                    e
                 })?,
             };
             let body_len = body.len();
@@ -1177,10 +1220,9 @@ pub async fn check_for_update(http: State<'_, HttpClient>) -> Result<UpdateInfo,
         });
     }
 
-    let body = resp
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| AppError::InvalidResponse {
+    let body_bytes = read_capped(resp, MAX_RELEASES_BODY_BYTES).await?;
+    let body: serde_json::Value =
+        serde_json::from_slice(&body_bytes).map_err(|e| AppError::InvalidResponse {
             message: format!("parse releases body: {e}"),
         })?;
 
