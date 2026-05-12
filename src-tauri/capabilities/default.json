@@ -7,10 +7,18 @@
     "core:default",
     "core:window:default",
     "core:event:default",
+    "core:tray:default",
     "core:webview:allow-internal-toggle-devtools",
     "dialog:allow-open",
     "log:default",
     "opener:allow-open-url",
-    "opener:allow-open-path"
+    "opener:allow-open-path",
+    "notification:default",
+    "notification:allow-notify",
+    "notification:allow-permission-state",
+    "notification:allow-request-permission",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }

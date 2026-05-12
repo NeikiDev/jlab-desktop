@@ -14,7 +14,7 @@ export default function AppFooter() {
         const v = await appVersion();
         if (!cancelled) setVersion(v);
       } catch {
-        // Footer is decorative; ignore failures.
+        /* footer is decorative */
       }
     })();
     return () => {
@@ -25,15 +25,15 @@ export default function AppFooter() {
   if (!version) return null;
 
   return (
-    <footer className="relative flex shrink-0 items-center justify-between gap-3 border-t border-border-faint bg-bg-plate/80 px-5 py-1.5 text-[11px] text-text-dim backdrop-blur-[6px]">
-      <span className="font-mono tracking-[0.04em]">JLab Desktop</span>
-      <div className="flex items-center gap-3 text-[11px]">
+    <footer className="relative flex shrink-0 items-center justify-between gap-3 border-t border-border-faint bg-bg-plate/40 px-7 py-2 text-[11px] text-text-dim backdrop-blur-[6px]">
+      <span>JLab Desktop</span>
+      <div className="flex items-center gap-3">
         <LogControl />
         <button
           type="button"
           onClick={() => void openUrl(RELEASES_URL)}
           title="Open the GitHub releases page"
-          className="inline-flex cursor-pointer items-center gap-1 rounded-sm border-0 bg-transparent px-1 py-0.5 font-mono tracking-[0.04em] text-text-muted transition-colors duration-fast ease-out hover:text-text"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-sm border-0 bg-transparent px-1 py-0.5 text-text-muted transition-colors duration-fast ease-out hover:text-text"
         >
           v{version}
         </button>

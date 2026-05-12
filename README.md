@@ -19,6 +19,7 @@ Native desktop client for the public [JLab static JAR scanner](https://jlab.thre
 - Local size validation (50 MB) and zip-magic check before any network call.
 - Cancellable scans, phase-aware progress UI with a live event log.
 - Local scan history (last 100 scans, summary only). Stored on your device, never uploaded. File bytes and signature payloads are not persisted.
+- Optional folder watcher (opt-in): auto-scans new `.jar` files in folders you choose, with quarantine, system-tray, autostart, and configurable alert thresholds. See [Folder watcher](#folder-watcher) below.
 - Small (well under 10 MB), starts fast, no analytics, no auth. The header status indicator pings `jlab.threat.rip/api/stats` once on launch and then once a minute while the window is visible. Each scan also fetches `jlab.threat.rip/api/public/threat-intel/<sha256>` to enrich the report. See [SECURITY.md](SECURITY.md#network-surface) for the full list of outbound endpoints.
 
 ## Download
@@ -100,6 +101,40 @@ Updates are manual. The app checks the GitHub releases API once on startup and, 
 5. The frontend renders the response, grouped by severity.
 
 The desktop client keeps the JavaScript side from making network calls. The Content Security Policy is `connect-src ipc: http://ipc.localhost`. Both sources are Tauri 2's IPC handler, neither is a public network egress, so any future `fetch()` to an external URL would fail at runtime.
+
+## Folder watcher
+
+The folder watcher is an opt-in subsystem that auto-scans new `.jar` files (or supported containers) that appear in folders you choose. It is off by default and explicitly is **not** an antivirus: no driver, no kernel hooks, no on-access blocking. It is a plain user-space filesystem subscriber that reuses the same `scan_jar` HTTP pipeline as the manual scan.
+
+### What it does
+
+- Subscribes to OS filesystem events (`FSEvents` on macOS, `ReadDirectoryChangesW` on Windows, `inotify` on Linux) via the `notify` crate, with a 500 ms debounce.
+- Snapshots a baseline on watch start. Files that already exist when watching starts are **ignored** unless you click "scan all now" on a folder.
+- Queues qualifying files through a token-bucket rate limiter capped at **12 uploads per minute** (the public API allows 15 / min / IP).
+- Coalesces native notifications inside a 4 s window so multiple hits produce one toast, not a flood.
+- Persists settings atomically as `watcher-settings.json` next to `history.json`.
+
+### Settings
+
+Open the panel from the "folder watcher" card on the idle dashboard.
+
+- **Notifications** (on by default): native OS toast when a scan crosses the alert threshold.
+- **Alert threshold**: `1 critical`, `multiple criticals`, or `families`. The multi-critical count is configurable from 2 to 4.
+- **Auto-action** (default `quarantine` at `multiple criticals`): when the threshold is met, the file is either moved to the in-app quarantine folder or sent to the OS trash. Both are recoverable; quarantine keeps the file out of the user's recycle bin.
+- **Hold until scanned**: rename `foo.jar` to `foo.jar.jlab-pending` while the scan is in flight so Java launchers cannot load it. Restored when the scan clears.
+- **Rescan after**: re-upload files in watched folders on a schedule (off / 7 / 14 / 30 days).
+- **Minimize to tray**, **start minimized**, **launch at login**: optional desktop integration.
+- **Reset**: wipes all watcher settings (including watched folders) and disables autostart.
+
+### File locations
+
+| Platform | Settings + history | Quarantine |
+| --- | --- | --- |
+| macOS    | `~/Library/Application Support/JLab/` | `~/Library/Application Support/JLab/quarantine/` |
+| Windows  | `%APPDATA%\JLab\` | `%APPDATA%\JLab\quarantine\` |
+| Linux    | `$XDG_DATA_HOME/JLab/` or `~/.local/share/JLab/` | same dir + `/quarantine/` |
+
+Quarantined files are renamed `<unix-timestamp>-<original-name>.quarantined`. The `.quarantined` suffix prevents Java launchers from loading them and gives any local AV a clear hint that the file is held intentionally. To restore, rename back to the original extension or move the file out of the folder.
 
 ## Build from source
 

@@ -23,15 +23,10 @@ function writeDismissedVersion(version: string): void {
   try {
     window.localStorage.setItem(DISMISS_KEY, version);
   } catch {
-    // localStorage may be unavailable; ignore.
+    /* ignore */
   }
 }
 
-// Pings the GitHub releases API once on startup. If a newer tag exists,
-// shows a button that opens the release page in the system browser. The app
-// never downloads or installs updates on its own. A dismissed version is
-// remembered in localStorage so the banner stays hidden until the next
-// release.
 export default function UpdaterButton() {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const cancelledRef = useRef(false);
@@ -77,14 +72,14 @@ export default function UpdaterButton() {
       setPhase({ kind: "idle" });
     };
     return (
-      <span className="inline-flex items-center gap-1 rounded-sm border border-accent bg-accent text-accent-ink">
+      <span className="inline-flex items-center gap-px overflow-hidden rounded-[var(--radius-sm)] bg-accent text-accent-ink">
         <button
           type="button"
           onClick={() => void openUrl(phase.info.releaseUrl)}
           title={`Open ${phase.info.releaseUrl}`}
-          className="inline-flex cursor-pointer items-center gap-1.5 rounded-l-sm border-0 bg-transparent px-2.5 py-1 text-[12px] font-semibold tracking-[0.01em] text-accent-ink transition-[background] duration-fast ease-out hover:bg-accent-bright"
+          className="inline-flex cursor-pointer items-center gap-1.5 border-0 bg-transparent px-2.5 py-1.5 text-[12px] font-semibold transition-[background] duration-fast ease-out hover:bg-accent-bright"
         >
-          <Dot />
+          <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-accent-ink/80" />
           {label}
         </button>
         <button
@@ -92,9 +87,11 @@ export default function UpdaterButton() {
           onClick={dismiss}
           aria-label="Dismiss update notice"
           title="Hide until the next release"
-          className="inline-flex h-full cursor-pointer items-center justify-center border-0 border-l border-accent-ink/20 bg-transparent px-1.5 py-1 text-accent-ink/80 transition-[background,color] duration-fast ease-out hover:bg-accent-bright hover:text-accent-ink"
+          className="inline-flex h-full cursor-pointer items-center justify-center border-0 border-l border-accent-ink/20 bg-transparent px-1.5 py-1.5 text-accent-ink/80 transition-[background,color] duration-fast ease-out hover:bg-accent-bright hover:text-accent-ink"
         >
-          <CloseIcon />
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
         </button>
       </span>
     );
@@ -106,38 +103,10 @@ export default function UpdaterButton() {
       onClick={() => void runCheck()}
       title={phase.message}
       className={cn(
-        "inline-flex cursor-pointer items-center gap-1.5 rounded-sm border border-border-strong bg-bg-elev px-2.5 py-1 text-[12px] font-semibold text-text-muted transition-[border-color] duration-fast ease-out hover:border-accent",
+        "inline-flex cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-faint bg-bg-elev/60 px-2.5 py-1 text-[12px] font-medium text-text-muted transition-[border-color] duration-fast ease-out hover:border-accent",
       )}
     >
       Update check failed. Retry
     </button>
-  );
-}
-
-function Dot() {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block h-1.5 w-1.5 rounded-full bg-accent-ink/80"
-    />
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 12 12"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M3 3l6 6M9 3l-6 6"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }

@@ -1,6 +1,6 @@
 {
   "name": "jlab-desktop",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Cross-platform desktop client for the JLab static JAR scanner API",
   "license": "(MIT OR Apache-2.0)",
   "homepage": "https://jlab.threat.rip/",
@@ -21,20 +21,22 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource-variable/geist-mono": "^5.2.7",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.0.0",
-    "@tauri-apps/cli": "^2.11.0",
-    "@types/node": "^25.6.0",
+    "@tailwindcss/vite": "^4.3.0",
+    "@tauri-apps/cli": "^2.11.1",
+    "@types/node": "^25.6.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.1",
     "tailwindcss": "^4.0.0",
     "typescript": "^6.0.3",
-    "vite": "^8.0.10"
+    "vite": "^8.0.12"
   }
 }

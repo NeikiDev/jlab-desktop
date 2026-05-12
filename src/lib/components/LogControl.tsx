@@ -48,9 +48,9 @@ export default function LogControl() {
   const sizeLabel = size === null ? "logs" : `logs ${formatBytes(size)}`;
 
   return (
-    <div className="inline-flex items-center gap-1.5 font-mono tracking-[0.04em] text-text-dim">
+    <div className="inline-flex items-center gap-1.5 text-text-dim">
       <span className="tnum text-text-muted">{sizeLabel}</span>
-      <span aria-hidden="true">·</span>
+      <span aria-hidden="true">&middot;</span>
       <button
         type="button"
         onClick={handleOpen}
@@ -59,7 +59,7 @@ export default function LogControl() {
       >
         open
       </button>
-      <span aria-hidden="true">·</span>
+      <span aria-hidden="true">&middot;</span>
       {confirming ? (
         <>
           <button
@@ -67,7 +67,7 @@ export default function LogControl() {
             disabled={busy}
             onClick={handleClear}
             title="Delete rotated logs and reset the active log file"
-            className="cursor-pointer rounded-sm border border-[color:var(--color-sev-critical-edge)] bg-sev-critical-soft px-1.5 py-0.5 text-sev-critical transition-colors duration-fast ease-out hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className="cursor-pointer rounded-sm border border-[color:var(--color-sev-critical-edge)] bg-sev-critical-soft px-1.5 py-0.5 text-sev-critical transition-colors duration-fast ease-out hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             confirm clear
           </button>
