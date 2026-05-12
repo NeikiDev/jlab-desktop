@@ -36,7 +36,7 @@ export default function SeverityBadge({ severity }: Props) {
   const t = TONE[severity];
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-[3px] px-2 py-[2px] font-mono text-[10px] font-semibold uppercase tracking-[0.16em] leading-none ${t.bg} ${t.fg} ${t.ring}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-[2px] text-[11px] font-semibold capitalize leading-none ${t.bg} ${t.fg} ${t.ring}`}
     >
       <span aria-hidden="true" className="block h-[5px] w-[5px] rounded-full bg-current" />
       {severity}

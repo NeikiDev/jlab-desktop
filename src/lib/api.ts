@@ -1,10 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  ActionMode,
+  ActionThreshold,
+  AlertThreshold,
   AppError,
   ConfirmedFamily,
   HistoryEntry,
   RatterScannerIntel,
+  RescanInterval,
   ScanPhaseEvent,
   ScanResult,
   Severity,
@@ -13,6 +17,9 @@ import type {
   ThreatIntel,
   ThreatRipIntel,
   VirusTotalIntel,
+  WatcherEvent,
+  WatcherRuntimeState,
+  WatcherSettings,
 } from "./types";
 
 interface ApiMatch {
@@ -95,7 +102,7 @@ export async function scanJar(path: string): Promise<ScanResult> {
   resetPhaseBuffer();
   const json = await invoke<string>("scan_jar", { path });
   const t1 = performance.now();
-  console.log(`[scanJar] invoke resolved in ${(t1 - t0).toFixed(0)}ms — ${json.length} chars`);
+  console.log(`[scanJar] invoke resolved in ${(t1 - t0).toFixed(0)}ms, ${json.length} chars`);
 
   let envelope: ScanEnvelope;
   try {
@@ -481,6 +488,18 @@ export function appErrorToUserText(err: AppError): string {
       return "Scan cancelled.";
     case "history_io":
       return `Could not read scan history: ${err.message}`;
+    case "watcher_io":
+      return `Folder watcher error: ${err.message}`;
+    case "invalid_watch_path":
+      return `Invalid watch folder: ${err.message}`;
+    case "trash_failed":
+      return `Could not move file to trash: ${err.message}`;
+    case "rename_failed":
+      return `Could not rename file: ${err.message}`;
+    case "watcher_disabled":
+      return "Please confirm the watcher warning before enabling it.";
+    case "notification_denied":
+      return "The operating system did not allow notifications. Enable them in system settings to receive watcher alerts.";
   }
 }
 
@@ -493,4 +512,136 @@ export function appErrorCode(err: AppError): string | null {
 
 export function appErrorWantsSupport(err: AppError): boolean {
   return err.kind === "invalid_response" || err.kind === "server" || err.kind === "network";
+}
+
+// === Watcher API ===
+
+export const WATCHER_EVENT = "watcher://event";
+
+export async function watcherGetSettings(): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_get_settings");
+}
+
+export async function watcherGetRuntimeState(): Promise<WatcherRuntimeState> {
+  return await invoke<WatcherRuntimeState>("watcher_get_runtime_state");
+}
+
+export async function watcherSetEnabled(enabled: boolean): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_enabled", { enabled });
+}
+
+export async function watcherAcknowledgeWarning(): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_acknowledge_warning");
+}
+
+export async function watcherAddFolder(path: string): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_add_folder", { path });
+}
+
+export async function watcherRemoveFolder(path: string): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_remove_folder", { path });
+}
+
+export async function watcherSetNotifications(enabled: boolean): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_notifications", { enabled });
+}
+
+export async function watcherSetAlertThreshold(
+  threshold: AlertThreshold,
+): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_alert_threshold", { threshold });
+}
+
+export async function watcherSetMultipleCriticalsThreshold(
+  count: number,
+): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_multiple_criticals_threshold", {
+    count,
+  });
+}
+
+export async function watcherSetAutoAction(
+  threshold: ActionThreshold,
+): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_auto_action", { threshold });
+}
+
+export async function watcherSetAutoActionMode(
+  mode: ActionMode,
+): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_auto_action_mode", { mode });
+}
+
+export async function watcherSetHold(hold: boolean): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_hold", { hold });
+}
+
+export async function watcherSetRescan(interval: RescanInterval): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_rescan", { interval });
+}
+
+export async function watcherSetTray(enabled: boolean): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_tray", { enabled });
+}
+
+export async function watcherSetStartMinimized(enabled: boolean): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_start_minimized", { enabled });
+}
+
+export async function watcherSetLaunchAtLogin(enabled: boolean): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_set_launch_at_login", { enabled });
+}
+
+export async function watcherScanAllNow(path: string): Promise<void> {
+  await invoke<void>("watcher_scan_all_now", { path });
+}
+
+export async function watcherShowInFolder(path: string): Promise<void> {
+  await invoke<void>("watcher_show_in_folder", { path });
+}
+
+export async function watcherOpenQuarantineDir(): Promise<void> {
+  await invoke<void>("watcher_open_quarantine_dir");
+}
+
+export async function watcherPickFolder(): Promise<string | null> {
+  const v = await invoke<string | null>("watcher_pick_folder");
+  return v ?? null;
+}
+
+export async function watcherResetToDefaults(): Promise<WatcherSettings> {
+  return await invoke<WatcherSettings>("watcher_reset_to_defaults");
+}
+
+type WatcherHandler = (event: WatcherEvent) => void;
+
+const watcherHandlers = new Set<WatcherHandler>();
+let watcherListener: Promise<UnlistenFn> | null = null;
+let watcherBuffer: WatcherEvent[] = [];
+
+function ensureWatcherListener(): Promise<UnlistenFn> {
+  if (!watcherListener) {
+    watcherListener = listen<WatcherEvent>(WATCHER_EVENT, (e) => {
+      if (watcherHandlers.size === 0) {
+        watcherBuffer.push(e.payload);
+        if (watcherBuffer.length > 500) watcherBuffer.shift();
+        return;
+      }
+      for (const h of watcherHandlers) h(e.payload);
+    });
+  }
+  return watcherListener;
+}
+
+export function subscribeWatcher(handler: WatcherHandler): () => void {
+  void ensureWatcherListener();
+  if (watcherBuffer.length > 0) {
+    const drained = watcherBuffer;
+    watcherBuffer = [];
+    for (const e of drained) handler(e);
+  }
+  watcherHandlers.add(handler);
+  return () => {
+    watcherHandlers.delete(handler);
+  };
 }

@@ -4,6 +4,7 @@ import type { AppError, HistoryEntry, Severity } from "../types";
 import SeverityBadge from "./SeverityBadge";
 import Sha256Chip from "./Sha256Chip";
 import { cn } from "../cn";
+import { usePausableInterval } from "../usePausableInterval";
 
 interface Props {
   onBack: () => void;
@@ -45,8 +46,6 @@ export default function HistoryPanel({ onBack }: Props) {
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
-  // Used to compute relative timestamps. We refresh it on mount and once per
-  // minute while the panel is open so "5m ago" stays honest.
   const [now, setNow] = useState(() => Date.now());
 
   const reload = useCallback(async () => {
@@ -65,13 +64,8 @@ export default function HistoryPanel({ onBack }: Props) {
     void reload();
   }, [reload]);
 
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(id);
-  }, []);
+  usePausableInterval(() => setNow(Date.now()), 60_000);
 
-  // The Rust side appends in insertion order (oldest first, newest last). For
-  // the UI we want newest first, but we don't want to mutate the list we got.
   const sorted = useMemo(() => {
     if (!entries) return null;
     return [...entries].reverse();
@@ -98,36 +92,19 @@ export default function HistoryPanel({ onBack }: Props) {
 
   return (
     <div className="flex animate-rise-in flex-col gap-4">
-      <header className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-bg-plate px-3 py-1.5 text-[13px] text-text transition-[background,border-color,transform] duration-fast ease-out hover:bg-bg-hover hover:border-border-strong active:translate-y-[1px]"
-          >
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
-              <path
-                d="M8 3 4 6.5 8 10"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            Back
-          </button>
-          <div className="flex flex-col">
-            <h2 className="m-0 text-[18px] font-semibold tracking-[-0.01em] text-text">
-              Recent scans
-            </h2>
-            <p className="m-0 text-[12.5px] text-text-muted">
-              Stored locally on this device. No file contents are kept.
-            </p>
-          </div>
-        </div>
-
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-faint bg-bg-elev/40 px-2.5 py-1.5 text-[12.5px] font-medium text-text-muted transition-[background,border-color,color] duration-fast ease-out hover:border-border hover:bg-bg-elev/80 hover:text-text"
+        >
+          <svg width="12" height="12" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+            <path d="M8 3 4 6.5 8 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Back
+        </button>
         {sorted && sorted.length > 0 && (
-          <div className="flex items-center gap-2">
+          <>
             {confirmingClear ? (
               <>
                 <span className="text-[12.5px] text-text-muted">
@@ -136,14 +113,14 @@ export default function HistoryPanel({ onBack }: Props) {
                 <button
                   type="button"
                   onClick={() => setConfirmingClear(false)}
-                  className="cursor-pointer rounded-[var(--radius-sm)] border border-border bg-bg-plate px-3 py-1.5 text-[12.5px] text-text-muted hover:bg-bg-hover hover:border-border-strong"
+                  className="cursor-pointer rounded-[var(--radius-sm)] border border-border-faint bg-bg-elev/60 px-3 py-1.5 text-[12.5px] font-medium text-text-muted hover:border-border hover:text-text"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={onClear}
-                  className="cursor-pointer rounded-[var(--radius-sm)] border border-[color:var(--color-sev-critical-edge)] bg-sev-critical-soft px-3 py-1.5 text-[12.5px] font-medium text-sev-critical hover:brightness-110"
+                  className="cursor-pointer rounded-[var(--radius-sm)] border border-[color:var(--color-sev-critical-edge)] bg-sev-critical-soft px-3 py-1.5 text-[12.5px] font-semibold text-sev-critical hover:brightness-110"
                 >
                   Confirm clear
                 </button>
@@ -152,12 +129,12 @@ export default function HistoryPanel({ onBack }: Props) {
               <button
                 type="button"
                 onClick={() => setConfirmingClear(true)}
-                className="cursor-pointer rounded-[var(--radius-sm)] border border-border bg-bg-plate px-3 py-1.5 text-[12.5px] text-text-muted hover:bg-bg-hover hover:text-text hover:border-border-strong"
+                className="cursor-pointer rounded-[var(--radius-sm)] border border-border-faint bg-bg-elev/60 px-3 py-1.5 text-[12.5px] font-medium text-text-muted hover:border-sev-critical-edge hover:text-sev-critical"
               >
                 Clear history
               </button>
             )}
-          </div>
+          </>
         )}
       </header>
 
@@ -168,16 +145,16 @@ export default function HistoryPanel({ onBack }: Props) {
       )}
 
       {sorted === null ? (
-        <div className="rounded-[var(--radius)] border border-border-faint bg-bg-plate p-8 text-center text-[13px] text-text-muted">
+        <div className="surface p-8 text-center text-[13px] text-text-muted">
           Loading…
         </div>
       ) : sorted.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-[var(--radius-lg)] border border-dashed border-border bg-bg-plate p-12 text-center">
+        <div className="surface flex flex-col items-center gap-3 p-12 text-center">
           <span
             aria-hidden="true"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border-strong text-text-muted"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-border-faint text-text-muted"
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
               <path
                 d="M8 4v4l2.5 2"
                 stroke="currentColor"
@@ -188,9 +165,9 @@ export default function HistoryPanel({ onBack }: Props) {
               <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5" />
             </svg>
           </span>
-          <h3 className="m-0 text-[15px] font-semibold text-text">No scans yet</h3>
+          <h3 className="m-0 text-[16px] font-semibold text-text">No scans yet</h3>
           <p className="m-0 max-w-[360px] text-[13px] text-text-muted">
-            Run a scan from the home screen and it will show up here.
+            Run a scan and it will show up here.
           </p>
         </div>
       ) : (
@@ -222,7 +199,7 @@ function HistoryRow({ entry, now, onDelete }: RowProps) {
 
   return (
     <li
-      className="flex items-center gap-4 rounded-[var(--radius)] border border-border-faint bg-bg-plate px-4 py-3 transition-[border-color] duration-fast ease-out hover:border-border"
+      className="surface flex items-center gap-4 px-4 py-3 transition-[border-color] duration-fast ease-out hover:border-border"
       style={{ contentVisibility: "auto", containIntrinsicSize: "0 64px" }}
     >
       <div className="min-w-0 flex-1">
@@ -236,15 +213,15 @@ function HistoryRow({ entry, now, onDelete }: RowProps) {
           <span className="tnum" title={formatAbsolute(entry.scannedAt)}>
             {formatRelative(entry.scannedAt, now)}
           </span>
-          <span aria-hidden="true" className="text-text-faint">·</span>
+          <span aria-hidden="true" className="text-text-faint">&middot;</span>
           <span className="tnum">{formatBytes(entry.fileSizeBytes)}</span>
-          <span aria-hidden="true" className="text-text-faint">·</span>
+          <span aria-hidden="true" className="text-text-faint">&middot;</span>
           <span className="tnum">
             {entry.signatureCount} signature{entry.signatureCount === 1 ? "" : "s"}
           </span>
           {entry.sha256 && (
             <>
-              <span aria-hidden="true" className="text-text-faint">·</span>
+              <span aria-hidden="true" className="text-text-faint">&middot;</span>
               <Sha256Chip value={entry.sha256} preview={24} />
             </>
           )}
@@ -253,14 +230,14 @@ function HistoryRow({ entry, now, onDelete }: RowProps) {
 
       <div className="hidden shrink-0 items-center gap-1.5 sm:flex">
         {presentSeverities.length === 0 ? (
-          <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-status-ok">
-            clean
+          <span className="text-[11px] font-semibold text-status-ok">
+            Clean
           </span>
         ) : (
           presentSeverities.map((sev) => (
             <span key={sev} className="inline-flex items-center gap-1">
               <SeverityBadge severity={sev} />
-              <span className={cn("tnum font-mono text-[11px]", "text-text-muted")}>
+              <span className={cn("tnum text-[11px]", "text-text-muted")}>
                 {entry.severityCounts[sev]}
               </span>
             </span>
@@ -272,15 +249,10 @@ function HistoryRow({ entry, now, onDelete }: RowProps) {
         type="button"
         onClick={onDelete}
         aria-label={`Delete entry for ${entry.fileName}`}
-        className="cursor-pointer rounded-[var(--radius-sm)] border border-transparent bg-transparent p-1.5 text-text-muted transition-[background,color,border-color] duration-fast ease-out hover:bg-bg-hover hover:text-sev-critical hover:border-[color:var(--color-sev-critical-edge)]"
+        className="cursor-pointer rounded-[var(--radius-sm)] border border-transparent bg-transparent p-1.5 text-text-muted transition-[background,color,border-color] duration-fast ease-out hover:bg-bg-elev/60 hover:text-sev-critical hover:border-[color:var(--color-sev-critical-edge)]"
       >
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
-          <path
-            d="m3 3 7 7M10 3l-7 7"
-            stroke="currentColor"
-            strokeWidth="1.4"
-            strokeLinecap="round"
-          />
+          <path d="m3 3 7 7M10 3l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
         </svg>
       </button>
     </li>

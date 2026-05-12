@@ -1,41 +1,45 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 @import "tailwindcss";
 
-/* JLab Desktop. Cybersecurity analysis instrument.
-   Cool near-black plates, hairline borders, mint-teal as the only "system"
-   accent. Severity colors stay warm so they never fight the accent. */
+/* JLab Desktop. Monochrome dark dashboard.
+   Pure black plates, white hairlines, corner-bracket card frames.
+   Green is reserved for positive deltas; severity uses its own ramp. */
 
 @theme {
-  /* Base plates. Cool, slightly blue-shifted near-black. */
-  --color-bg:            #06080c;
-  --color-bg-plate:      #0b0e14;
-  --color-bg-elev:       #10141c;
-  --color-bg-elev-2:     #161b25;
-  --color-bg-hover:      #1c2230;
-  --color-bg-inset:      #04060a;
+  /* Base plates. True near-black, slightly warm. */
+  --color-bg:            #0a0a0a;
+  --color-bg-plate:      #0f0f0f;
+  --color-bg-elev:       #141414;
+  --color-bg-elev-2:     #181818;
+  --color-bg-hover:      #1d1d1d;
+  --color-bg-inset:      #050505;
 
-  /* Borders. Hairlines that read as architectural lines, not boxes. */
-  --color-border-faint:  #161b25;
-  --color-border:        #232a38;
-  --color-border-strong: #303a4d;
-  --color-border-bright: #4a5670;
+  --color-bg-side:       #0a0a0a;
+  --color-bg-side-elev:  #131313;
 
-  /* Text. Cool gray ramp. */
-  --color-text:          #e6e9f0;
-  --color-text-muted:    #98a1b2;
-  --color-text-dim:      #6a7385;
-  --color-text-faint:    #424b5c;
+  /* Borders. White hairlines, low alpha so they breathe. */
+  --color-border-faint:  rgba(255, 255, 255, 0.05);
+  --color-border:        rgba(255, 255, 255, 0.09);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-border-bright: rgba(255, 255, 255, 0.28);
 
-  /* The single brand accent. Mint-teal. Reads as "live / system / scan".
-     Used surgically. Never on severity findings. */
-  --color-accent:        #5eead4;
-  --color-accent-bright: #8af5e1;
-  --color-accent-deep:   #2fb8a0;
-  --color-accent-soft:   rgba(94, 234, 212, 0.10);
-  --color-accent-glow:   rgba(94, 234, 212, 0.30);
-  --color-accent-shadow: rgba(94, 234, 212, 0.18);
-  --color-accent-ink:    #021915;
+  /* Text. Neutral grayscale ramp. */
+  --color-text:          #f5f5f5;
+  --color-text-muted:    #a3a3a3;
+  --color-text-dim:      #737373;
+  --color-text-faint:    #525252;
 
-  /* Severity. Five tiers, all warm to cool, none mint. */
+  /* Accent. Off-white. The dashboard avoids chromatic accents on purpose. */
+  --color-accent:        #fafafa;
+  --color-accent-bright: #ffffff;
+  --color-accent-deep:   #d4d4d4;
+  --color-accent-soft:   rgba(255, 255, 255, 0.06);
+  --color-accent-glow:   rgba(255, 255, 255, 0.18);
+  --color-accent-shadow: rgba(255, 255, 255, 0.10);
+  --color-accent-ink:    #0a0a0a;
+
+  /* Severity. Functional, not branded. */
   --color-sev-critical:      #ff5d6c;
   --color-sev-critical-soft: rgba(255, 93, 108, 0.10);
   --color-sev-critical-edge: rgba(255, 93, 108, 0.42);
@@ -52,17 +56,19 @@
   --color-sev-info-soft:     rgba(124, 133, 149, 0.10);
   --color-sev-info-edge:     rgba(124, 133, 149, 0.40);
 
-  /* Status. The "online" ring uses a slightly greener mint to read as
-     pulse-of-life rather than brand. */
-  --color-status-ok:    #34d399;
-  --color-status-warn:  #ffd06b;
-  --color-status-down:  #ff5d6c;
+  /* Status. Used for "on / good / enabled" UI. */
+  --color-status-ok:        #34d399;
+  --color-status-ok-bright: #4ade80;
+  --color-status-ok-soft:   rgba(52, 211, 153, 0.12);
+  --color-status-ok-edge:   rgba(52, 211, 153, 0.42);
+  --color-status-warn:      #ffd06b;
+  --color-status-down:      #ff5d6c;
 
-  /* Geometry. Tight radii. This is an instrument, not a soft consumer app. */
   --radius-xs: 3px;
   --radius-sm: 5px;
   --radius:    8px;
   --radius-lg: 12px;
+  --radius-xl: 16px;
 
   --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
@@ -71,23 +77,20 @@
   --duration-base: 200ms;
   --duration-slow: 320ms;
 
-  /* Typography. Plain system stack. Highly readable at desktop sizes. */
-  --font-sans:    -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-                  Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-                  Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans:    "Geist Variable", -apple-system, BlinkMacSystemFont,
+                  "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Geist Variable", -apple-system, BlinkMacSystemFont,
+                  "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:    "Geist Mono Variable", ui-monospace, "SF Mono", Menlo,
+                  Consolas, monospace;
 
   --animate-fade-in:       fade-in var(--duration-fast) var(--ease-out);
   --animate-slide-in:      slide-in var(--duration-base) var(--ease-out);
   --animate-rise-in:       rise-in var(--duration-base) var(--ease-emph);
   --animate-spin-fast:     spin 0.85s linear infinite;
   --animate-indeterminate: indeterminate 1.4s ease-in-out infinite;
-  --animate-pulse-soft:    pulse-soft 1.5s ease-out infinite;
-  --animate-status-pulse:  status-pulse 1.4s ease-in-out infinite;
-  --animate-scan-sweep:    scan-sweep 2.4s var(--ease-in-out) infinite;
-  --animate-scan-line:     scan-line 3.2s linear infinite;
-  --animate-blink-caret:   blink-caret 1.05s steps(2, end) infinite;
+  --animate-pulse-soft:    pulse-soft 1.6s ease-out infinite;
+  --animate-status-pulse:  status-pulse 1.6s ease-in-out infinite;
 }
 
 @keyframes fade-in {
@@ -117,31 +120,13 @@
 
 @keyframes pulse-soft {
   0%   { box-shadow: 0 0 0 0 var(--color-accent-glow); }
-  70%  { box-shadow: 0 0 0 8px rgba(94, 234, 212, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(94, 234, 212, 0); }
+  70%  { box-shadow: 0 0 0 8px rgba(255, 255, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
 }
 
 @keyframes status-pulse {
-  0%, 100% { opacity: 0.4; }
+  0%, 100% { opacity: 0.45; }
   50%      { opacity: 1; }
-}
-
-/* Slow horizontal sweep across the drop bay when active.
-   Translates a gradient bar with transform only. */
-@keyframes scan-sweep {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
-}
-
-/* Vertical scanline used on the brand mark. */
-@keyframes scan-line {
-  0%   { transform: translateY(-120%); }
-  100% { transform: translateY(120%); }
-}
-
-@keyframes blink-caret {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0; }
 }
 
 :root {
@@ -157,7 +142,7 @@ html, body {
   height: 100%;
   background: var(--color-bg);
   color: var(--color-text);
-  font-size: 15px;
+  font-size: 15.5px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -166,15 +151,7 @@ html, body {
 }
 
 body {
-  /* Ambient atmosphere. A faint dotted grid plus two soft radial pools.
-     Pinned to the viewport so it does not move while scrolling. */
   background-color: var(--color-bg);
-  background-image:
-    radial-gradient(circle at 18% 8%,  rgba(94, 234, 212, 0.07), transparent 38%),
-    radial-gradient(circle at 92% 110%, rgba(106, 184, 255, 0.06), transparent 42%),
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 100% 100%, 100% 100%, 24px 24px;
-  background-attachment: fixed;
 }
 
 #app {
@@ -186,20 +163,20 @@ body {
 }
 
 ::selection {
-  background: var(--color-accent-soft);
+  background: rgba(255, 255, 255, 0.18);
   color: var(--color-accent-bright);
 }
 
 *::-webkit-scrollbar       { width: 10px; height: 10px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: rgba(255, 255, 255, 0.08);
   border: 2px solid transparent;
   background-clip: padding-box;
   border-radius: 6px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--color-border-strong);
+  background: rgba(255, 255, 255, 0.18);
   background-clip: padding-box;
 }
 
@@ -215,122 +192,67 @@ button {
 
 code, pre, samp, .mono {
   font-family: var(--font-mono);
-  font-size: 0.93em;
+  font-size: 0.92em;
 }
 
 .tnum { font-variant-numeric: tabular-nums; }
 
-/* Tracked, uppercase, mono labels. Used for "INSTRUMENT" readouts. */
-.label {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--color-text-dim);
+/* .surface: legacy card style. Kept so older panels keep working. */
+.surface {
+  position: relative;
+  background: var(--color-bg-plate);
+  border: 1px solid var(--color-border-faint);
+  border-radius: var(--radius);
 }
 
-.label-accent {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--color-accent);
+/* .frame: dashboard card style. Faint full border plus brighter corner
+   ticks that read like technical-drawing brackets. The corner ticks are
+   drawn with eight 1px linear-gradients pinned to each corner of the
+   element so they sit on top of any inner content. */
+.frame {
+  position: relative;
+  background: var(--color-bg-plate);
+  border: 1px solid var(--color-border-faint);
+  border-radius: var(--radius);
 }
-
-/* A precise hairline rule that respects token. */
-.hairline { background: var(--color-border-faint); }
-
-/* Corner brackets. Four absolutely-positioned 8x8 marks on a parent
-   element. Use `.bracketed` on the parent (must be position:relative). */
-.bracketed::before,
-.bracketed::after,
-.bracketed > .bracket-bl,
-.bracketed > .bracket-br {
+.frame::before {
   content: "";
   position: absolute;
-  width: 10px;
-  height: 10px;
-  border: 1px solid var(--color-border-bright);
+  inset: -1px;
   pointer-events: none;
-  transition: border-color var(--duration-base) var(--ease-out);
-}
-.bracketed::before  { top: -1px;  left: -1px;  border-right: 0; border-bottom: 0; }
-.bracketed::after   { top: -1px;  right: -1px; border-left: 0;  border-bottom: 0; }
-.bracketed > .bracket-bl { bottom: -1px; left: -1px;  border-right: 0; border-top: 0; }
-.bracketed > .bracket-br { bottom: -1px; right: -1px; border-left: 0;  border-top: 0; }
-
-.bracketed-active::before,
-.bracketed-active::after,
-.bracketed-active > .bracket-bl,
-.bracketed-active > .bracket-br {
-  border-color: var(--color-accent);
-}
-
-/* Ambient grid for the drop bay. Pure CSS, no images. */
-.grid-bay {
-  background-image:
-    linear-gradient(to right,  rgba(94, 234, 212, 0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(94, 234, 212, 0.05) 1px, transparent 1px);
-  background-size: 32px 32px;
-  background-position: -1px -1px;
-}
-
-/* The horizontal sweep bar that crosses the drop bay when armed. */
-.scan-bar {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
   border-radius: inherit;
-}
-.scan-bar::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 35%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(94, 234, 212, 0.18) 45%,
-    rgba(94, 234, 212, 0.32) 50%,
-    rgba(94, 234, 212, 0.18) 55%,
-    transparent
-  );
-  transform: translateX(-100%);
-  will-change: transform;
-  animation: var(--animate-scan-sweep);
+  background:
+    linear-gradient(var(--color-border-bright), var(--color-border-bright)) top    left  / 14px 1px no-repeat,
+    linear-gradient(var(--color-border-bright), var(--color-border-bright)) top    left  / 1px 14px no-repeat,
+    linear-gradient(var(--color-border-bright), var(--color-border-bright)) top    right / 14px 1px no-repeat,
+    linear-gradient(var(--color-border-bright), var(--color-border-bright)) top    right / 1px 14px no-repeat,
+    linear-gradient(var(--color-border-bright), var(--color-border-bright)) bottom left  / 14px 1px no-repeat,
+    linear-gradient(var(--color-border-bright), var(--color-border-bright)) bottom left  / 1px 14px no-repeat,
+    linear-gradient(var(--color-border-bright), var(--color-border-bright)) bottom right / 14px 1px no-repeat,
+    linear-gradient(var(--color-border-bright), var(--color-border-bright)) bottom right / 1px 14px no-repeat;
 }
 
-/* The blinking caret used in the brand mark. */
-.caret {
-  display: inline-block;
-  width: 7px;
-  height: 1em;
-  vertical-align: text-bottom;
-  background: var(--color-accent);
-  margin-left: 4px;
-  animation: var(--animate-blink-caret);
+.frame-elev {
+  background-color: var(--color-bg-elev);
 }
 
-/* A small, repeating dotted "tick row" used to decorate panel headers
-   without adding any image dependencies. */
-.tick-row {
-  --tick: var(--color-border);
-  background-image: linear-gradient(
-    to right,
-    var(--tick) 0,
-    var(--tick) 1px,
+/* Diagonal hatch fill, used for chart segments. Uses currentColor so it
+   can pick up the surrounding text color. */
+.hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    currentColor 0,
+    currentColor 1px,
     transparent 1px,
-    transparent 6px
+    transparent 4px
   );
-  background-size: 6px 1px;
-  background-repeat: repeat-x;
-  background-position: left center;
-  height: 1px;
+}
+
+.caption {
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--color-text-dim);
 }
 
 @media (prefers-reduced-motion: reduce) {

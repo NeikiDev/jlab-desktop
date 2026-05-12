@@ -21,9 +21,6 @@ export default function DropZone({ onPick }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const [picking, setPicking] = useState(false);
 
-  // Keep onPick in a ref so the drag-drop listener can register exactly once.
-  // Re-registering on every onPick identity change is a known source of HMR
-  // race conditions where a new listener attaches before the old one detaches.
   const onPickRef = useRef(onPick);
   useEffect(() => {
     onPickRef.current = onPick;
@@ -39,9 +36,6 @@ export default function DropZone({ onPick }: Props) {
         else if (event.payload.type === "leave") setDragOver(false);
         else if (event.payload.type === "drop") {
           setDragOver(false);
-          // Prefer a supported file. If none match, hand the first path to
-          // the backend so it returns a typed unsupported_file error and
-          // the user sees a real banner instead of silent failure.
           const picked =
             event.payload.paths.find(hasSupportedExt) ??
             event.payload.paths[0];
@@ -53,8 +47,6 @@ export default function DropZone({ onPick }: Props) {
         else unlisten = fn;
       });
 
-    // If the window loses focus mid-drag, the leave event may not fire.
-    // Reset dragOver so the dropzone never gets stuck in armed state.
     const onBlur = () => setDragOver(false);
     window.addEventListener("blur", onBlur);
 
@@ -73,10 +65,7 @@ export default function DropZone({ onPick }: Props) {
         multiple: false,
         directory: false,
         filters: [
-          {
-            name: "JAR or container",
-            extensions: [...SUPPORTED_EXTS],
-          },
+          { name: "JAR or container", extensions: [...SUPPORTED_EXTS] },
         ],
       });
       if (typeof selected === "string") onPick(selected);
@@ -103,32 +92,22 @@ export default function DropZone({ onPick }: Props) {
       onClick={pickFile}
       onKeyDown={onKeyDown}
       className={cn(
-        "group relative isolate flex w-full cursor-pointer flex-col items-center justify-center gap-4 overflow-hidden rounded-[var(--radius-lg)] border-2 border-dashed bg-bg-plate px-10 py-16 text-center transition-[border-color,background] duration-base ease-out",
+        "frame group relative isolate flex h-full min-h-[420px] w-full cursor-pointer flex-col items-center justify-center gap-6 overflow-hidden px-10 py-16 text-center transition-colors duration-base ease-out",
         dragOver
-          ? "border-accent bg-bg-elev"
-          : "border-border hover:border-border-strong hover:bg-bg-plate/80",
+          ? "bg-bg-elev"
+          : "hover:bg-bg-elev/40",
         picking && "cursor-wait opacity-90",
       )}
     >
-      {/* Soft ambient grid floor. Cannot block clicks. */}
-      <div
-        className="grid-bay pointer-events-none absolute inset-0 opacity-40"
-        aria-hidden="true"
-      />
-
-      {/* Sweep bar only while a file is over the window. */}
-      {dragOver && <div className="scan-bar" aria-hidden="true" />}
-
-      {/* Icon. */}
       <div
         className={cn(
-          "relative inline-flex h-16 w-16 items-center justify-center rounded-full border bg-bg-elev text-accent transition-[transform,border-color] duration-base ease-out will-change-transform",
+          "relative inline-flex h-14 w-14 items-center justify-center rounded-[var(--radius-sm)] border bg-bg-elev transition-[transform,border-color,color] duration-base ease-out will-change-transform",
           dragOver
-            ? "border-accent [transform:scale(1.06)_translateZ(0)]"
-            : "border-border-strong group-hover:border-accent",
+            ? "border-text text-text [transform:scale(1.05)_translateZ(0)]"
+            : "border-border-faint text-text-muted group-hover:border-border group-hover:text-text",
         )}
       >
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path
             d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5"
             stroke="currentColor"
@@ -146,20 +125,18 @@ export default function DropZone({ onPick }: Props) {
         </svg>
       </div>
 
-      <div className="relative flex flex-col gap-1">
-        <h2 className="m-0 text-[18px] font-semibold tracking-[-0.005em] text-text">
-          {dragOver ? "Release to scan" : "Drop a .jar, .zip, .mcpack, or .mrpack here"}
+      <div className="flex flex-col gap-1.5">
+        <h2 className="m-0 text-[22px] font-semibold tracking-[-0.01em] text-text">
+          {dragOver ? "Release to scan" : "Drop a file to scan"}
         </h2>
-        <p className="m-0 text-[14px] text-text-muted">
-          or click anywhere to pick one from disk
+        <p className="m-0 text-[14.5px] text-text-muted">
+          .jar, .zip, .mcpack, or .mrpack. Up to 50 MB.
         </p>
       </div>
 
-      {/* Visual call-to-action. The whole panel is clickable, so this is
-          decorative and shouldn't capture its own click. */}
       <span
         aria-hidden="true"
-        className="relative inline-flex items-center gap-2 rounded-[var(--radius-sm)] border border-accent bg-accent px-5 py-2.5 text-[14px] font-semibold tracking-[0.01em] text-accent-ink transition-[background,box-shadow] duration-fast ease-out group-hover:bg-accent-bright group-hover:shadow-[0_0_0_4px_var(--color-accent-soft)]"
+        className="relative inline-flex items-center gap-2 rounded-[var(--radius-sm)] bg-status-ok px-5 py-2.5 text-[14px] font-semibold tracking-[-0.005em] text-bg shadow-[0_0_0_1px_var(--color-status-ok-edge)] transition-[background,box-shadow,transform] duration-fast ease-out group-hover:bg-status-ok-bright group-hover:shadow-[0_0_0_4px_var(--color-status-ok-soft)] group-active:translate-y-[1px]"
       >
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
           <path
@@ -171,10 +148,6 @@ export default function DropZone({ onPick }: Props) {
         </svg>
         Choose file
       </span>
-
-      <p className="relative m-0 text-[12.5px] text-text-dim">
-        Up to 50 MB
-      </p>
     </div>
   );
 }

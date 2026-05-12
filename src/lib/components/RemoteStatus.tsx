@@ -12,6 +12,12 @@ const DOT_COLOR: Record<Phase, string> = {
   offline:  "bg-sev-critical",
 };
 
+const LABEL: Record<Phase, string> = {
+  checking: "Checking",
+  online: "Online",
+  offline: "Offline",
+};
+
 export default function RemoteStatus() {
   const [phase, setPhase] = useState<Phase>("checking");
   const [info, setInfo] = useState<StatusInfo | null>(null);
@@ -75,9 +81,6 @@ export default function RemoteStatus() {
     };
   }, []);
 
-  const label =
-    phase === "checking" ? "checking" : phase === "online" ? "online" : "offline";
-
   let tooltip = "Checking jlab.threat.rip…";
   if (info) {
     const parts: string[] = [];
@@ -95,18 +98,21 @@ export default function RemoteStatus() {
       type="button"
       onClick={run}
       title={tooltip}
-      aria-label={`Remote status: ${label}. Click to recheck.`}
-      className="inline-flex cursor-pointer items-center justify-center rounded-full border border-border-faint bg-bg-plate/60 p-2 transition-[border-color,background] duration-fast ease-out hover:border-border-strong hover:bg-bg-plate"
+      aria-label={`Remote status: ${LABEL[phase]}. Click to recheck.`}
+      className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border-faint bg-bg-elev/60 px-2.5 py-1 transition-[border-color,background] duration-fast ease-out hover:border-border hover:bg-bg-elev"
     >
       <span
         className={cn(
-          "block h-[8px] w-[8px] shrink-0 rounded-full",
+          "block h-[7px] w-[7px] shrink-0 rounded-full",
           DOT_COLOR[phase],
           phase === "checking" && "animate-status-pulse",
           phase === "online" && "shadow-[0_0_0_3px_rgba(52,211,153,0.16)]",
           phase === "offline" && "shadow-[0_0_0_3px_var(--color-sev-critical-soft)]",
         )}
       />
+      <span className="text-[11.5px] font-medium text-text-muted">
+        {LABEL[phase]}
+      </span>
     </button>
   );
 }

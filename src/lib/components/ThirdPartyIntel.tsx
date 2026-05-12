@@ -19,7 +19,7 @@ const TONE_BORDER: Record<Tone, string> = {
   ok:      "border-[color:rgba(52,211,153,0.32)]",
   warn:    "border-[color:var(--color-sev-medium-edge)]",
   bad:     "border-[color:var(--color-sev-critical-edge)]",
-  neutral: "border-border",
+  neutral: "border-border-faint",
 };
 
 const TONE_TEXT: Record<Tone, string> = {
@@ -118,46 +118,39 @@ export default function ThirdPartyIntel({ intel }: Props) {
 
   const headline =
     overall === "bad"
-      ? "Threats Detected"
+      ? "Threats detected"
       : overall === "warn"
-      ? "Possible Threats"
-      : overall === "ok"
-      ? "No Threats Detected"
-      : "Third-Party Intel";
+        ? "Possible threats"
+        : overall === "ok"
+          ? "No threats detected"
+          : "Third-party intel";
 
   return (
     <section
       aria-label="Third-party threat intel"
       className={cn(
-        "bracketed relative flex animate-rise-in flex-col gap-3 overflow-hidden rounded-[var(--radius-lg)] border bg-bg-plate p-4 px-5",
+        "surface flex animate-rise-in flex-col gap-4 p-5",
         TONE_BORDER[overall],
       )}
     >
-      <span className="bracket-bl" aria-hidden="true" />
-      <span className="bracket-br" aria-hidden="true" />
-
-      <header className="flex items-center gap-2.5">
+      <header className="flex items-center gap-3">
         <span aria-hidden="true" className={cn("h-2 w-2 rounded-full", TONE_DOT[overall])} />
-        <span className={cn("font-mono text-[10.5px] font-semibold uppercase tracking-[0.16em]", TONE_TEXT[overall])}>
-          third-party intel
-        </span>
-        <span aria-hidden="true" className="h-3 w-px bg-border" />
-        <span className="text-[14px] font-semibold tracking-[-0.005em] text-text">
+        <h3 className={cn("m-0 text-[15px] font-semibold tracking-[-0.005em]", overall === "ok" ? "text-status-ok" : TONE_TEXT[overall])}>
           {headline}
-        </span>
-        <span className="tnum ml-auto font-mono text-[11px] text-text-faint">
-          {String(cards.length).padStart(2, "0")} {cards.length === 1 ? "source" : "sources"}
+        </h3>
+        <span className="tnum ml-auto text-[12px] text-text-dim">
+          {cards.length} {cards.length === 1 ? "source" : "sources"}
         </span>
       </header>
 
       <div
         className={cn(
-          "grid gap-2",
+          "grid gap-3",
           cards.length === 1
             ? "grid-cols-1"
             : cards.length === 2
-            ? "grid-cols-2 max-[640px]:grid-cols-1"
-            : "grid-cols-3 max-[820px]:grid-cols-2 max-[520px]:grid-cols-1",
+              ? "grid-cols-2 max-[640px]:grid-cols-1"
+              : "grid-cols-3 max-[820px]:grid-cols-2 max-[520px]:grid-cols-1",
         )}
       >
         {cards.map((c) => (
@@ -186,7 +179,7 @@ function CardShell({
   return (
     <article
       className={cn(
-        "flex h-full flex-col gap-2.5 rounded-[var(--radius)] border bg-bg-elev p-3 transition-[border-color] duration-fast ease-out",
+        "flex h-full flex-col gap-3 rounded-[var(--radius-sm)] border bg-bg-elev/40 p-3.5 transition-[border-color] duration-fast ease-out",
         TONE_BORDER[tone],
       )}
     >
@@ -216,7 +209,7 @@ function ViewButton({ url, label = "View" }: { url: string; label?: string }) {
       onClick={() => {
         void openUrl(url);
       }}
-      className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-[var(--radius-xs)] border border-border bg-bg-plate px-2 py-1 font-mono text-[10.5px] font-medium tracking-[0.02em] text-text-muted transition-[background,border-color,color] duration-fast ease-out hover:border-border-strong hover:bg-bg-hover hover:text-text active:translate-y-[1px]"
+      className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-[var(--radius-xs)] border border-border-faint bg-bg-plate px-2 py-1 text-[11px] font-medium text-text-muted transition-[background,border-color,color] duration-fast ease-out hover:border-border-strong hover:bg-bg-elev hover:text-text active:translate-y-[1px]"
       aria-label={`${label} in browser`}
     >
       {label}
@@ -251,14 +244,14 @@ function VirusTotalCard({
   return (
     <CardShell tone={tone} vendor="VirusTotal" domain="virustotal.com" reportUrl={reportUrl}>
       <div className="flex items-baseline gap-2">
-        <span className={cn("tnum text-[26px] font-semibold leading-none tracking-[-0.03em]", TONE_TEXT[tone])}>
+        <span className={cn("tnum text-[28px] font-semibold leading-none tracking-[-0.03em]", TONE_TEXT[tone])}>
           {detections}
         </span>
-        <span className="font-mono text-[12px] text-text-muted">/ {total || "?"}</span>
-        <span className="ml-auto tnum font-mono text-[11px] text-text-dim">{pct}</span>
+        <span className="text-[13px] text-text-muted">/ {total || "?"}</span>
+        <span className="ml-auto tnum text-[11.5px] text-text-dim">{pct}</span>
       </div>
-      <div className="text-[12px] text-text-muted">{label}</div>
-      <div className="flex flex-wrap gap-1 pt-0.5">
+      <div className="text-[12.5px] text-text-muted">{label}</div>
+      <div className="flex flex-wrap gap-1.5 pt-0.5">
         <Stat label="malicious" value={vt.malicious} />
         <Stat label="suspicious" value={vt.suspicious} />
         <Stat label="undetected" value={vt.undetected} />
@@ -287,15 +280,15 @@ function ThreatRipCard({
     <CardShell
       tone={tone}
       vendor="Threat Insights Portal"
-      domain="www.threat.rip"
+      domain="threat.rip"
       reportUrl={reportUrl}
     >
       <div className="flex items-baseline gap-2">
-        <span className={cn("text-[15px] font-semibold tracking-[-0.005em] uppercase", TONE_TEXT[tone])}>
+        <span className={cn("text-[16px] font-semibold capitalize tracking-[-0.005em]", TONE_TEXT[tone])}>
           {verdict}
         </span>
         {score !== null && (
-          <span className="ml-auto tnum font-mono text-[11px] text-text-dim">
+          <span className="ml-auto tnum text-[11.5px] text-text-dim">
             score <span className="text-text">{score}</span>
             <span className="text-text-faint">/100</span>
           </span>
@@ -304,13 +297,13 @@ function ThreatRipCard({
       {tr.threat ? (
         <div className="font-mono text-[12px] text-text break-all">{tr.threat}</div>
       ) : (
-        <div className="text-[12px] text-text-muted">No known family attribution.</div>
+        <div className="text-[12.5px] text-text-muted">No known family attribution.</div>
       )}
       {score !== null && (
-        <div className="relative mt-1 h-[3px] w-full overflow-hidden rounded-[2px] bg-bg-inset">
+        <div className="relative mt-1 h-1 w-full overflow-hidden rounded-full bg-bg-inset">
           <div
             className={cn(
-              "absolute inset-y-0 left-0 right-0 origin-left rounded-[2px] transition-transform duration-slow ease-out will-change-transform",
+              "absolute inset-y-0 left-0 right-0 origin-left rounded-full transition-transform duration-slow ease-out",
               tone === "bad" ? "bg-sev-critical" : tone === "warn" ? "bg-sev-medium" : "bg-status-ok",
             )}
             style={{ transform: `scaleX(${Math.max(2, Math.min(100, score)) / 100})` }}
@@ -327,7 +320,7 @@ function RatterCard({ rs, tone }: { rs: RatterScannerIntel; tone: Tone }) {
     : rs.safe
       ? "Whitelisted"
       : rs.automatedSafe
-        ? "Automated Safe"
+        ? "Automated safe"
         : "Unverified";
   const subtitle = rs.malicious
     ? "Known malicious sample"
@@ -377,8 +370,8 @@ function RatterGithubPanel({ info }: { info: RatterGithubInfo }) {
     <div className="flex min-w-0 shrink-0 flex-col gap-1 rounded-[var(--radius-xs)] border border-border-faint bg-bg-inset px-2.5 py-1.5">
       <div className="flex items-center gap-1.5 text-text-muted">
         <GithubMark />
-        <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em] text-text-dim">
-          Verified Source
+        <span className="text-[10.5px] font-medium text-text-dim">
+          Verified source
         </span>
       </div>
       {repoUrl ? (
@@ -387,7 +380,7 @@ function RatterGithubPanel({ info }: { info: RatterGithubInfo }) {
           onClick={() => {
             void openUrl(repoUrl);
           }}
-          className="cursor-pointer truncate text-left text-[13px] font-medium text-sev-low hover:underline"
+          className="cursor-pointer truncate text-left text-[13px] font-medium text-accent hover:underline"
           title={repoUrl}
         >
           {project}
@@ -396,7 +389,7 @@ function RatterGithubPanel({ info }: { info: RatterGithubInfo }) {
         <span className="truncate text-[13px] font-medium text-text">{project}</span>
       )}
       {owner && (
-        <span className="truncate font-mono text-[10.5px] text-text-dim">by {owner}</span>
+        <span className="truncate text-[10.5px] text-text-dim">by {owner}</span>
       )}
     </div>
   );
@@ -422,7 +415,7 @@ function GithubMark() {
 function Stat({ label, value }: { label: string; value: number | null | undefined }) {
   if (value == null) return null;
   return (
-    <span className="inline-flex items-baseline gap-1 rounded-[var(--radius-xs)] border border-border-faint bg-bg-inset px-1.5 py-0.5 font-mono text-[10.5px] text-text-muted">
+    <span className="inline-flex items-baseline gap-1 rounded-full border border-border-faint bg-bg-inset px-2 py-0.5 text-[10.5px] text-text-muted">
       <span className="text-text-faint">{label}</span>
       <span className="tnum text-text">{value}</span>
     </span>

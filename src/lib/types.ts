@@ -108,7 +108,13 @@ export type AppError =
   | { kind: "no_jar_in_archive" }
   | { kind: "invalid_archive"; message: string; code?: string }
   | { kind: "cancelled" }
-  | { kind: "history_io"; message: string; code?: string };
+  | { kind: "history_io"; message: string; code?: string }
+  | { kind: "watcher_io"; message: string }
+  | { kind: "invalid_watch_path"; message: string }
+  | { kind: "trash_failed"; message: string }
+  | { kind: "rename_failed"; message: string }
+  | { kind: "watcher_disabled" }
+  | { kind: "notification_denied" };
 
 export interface HistorySeverityCounts {
   critical: number;
@@ -127,7 +133,79 @@ export interface HistoryEntry {
   severityCounts: HistorySeverityCounts;
   topSeverity: Severity;
   signatureCount: number;
+  /// "manual" for drag-drop scans, "watcher" for auto-scans. Older entries
+  /// without this field decode as "manual" on the Rust side.
+  source?: string;
 }
+
+// === Watcher ===
+
+export type AlertThreshold =
+  | "critical_single"
+  | "multiple_criticals"
+  | "confirmed_families_only";
+
+export type ActionThreshold =
+  | "off"
+  | "multiple_criticals"
+  | "confirmed_families_only";
+
+export type ActionMode = "quarantine" | "trash";
+
+export type RescanInterval = "off" | "days_7" | "days_14" | "days_30";
+
+export interface WatchedFolder {
+  path: string;
+  addedAt: string;
+  lastFullScanAt?: string | null;
+}
+
+export interface WatcherSettings {
+  version: number;
+  enabled: boolean;
+  warningAcknowledged: boolean;
+  folders: WatchedFolder[];
+  notificationsEnabled: boolean;
+  alertThreshold: AlertThreshold;
+  coalesceWindowMs: number;
+  multipleCriticalsThreshold: number;
+  autoAction: ActionThreshold;
+  autoActionMode: ActionMode;
+  holdUntilScanned: boolean;
+  rescanInterval: RescanInterval;
+  minimizeToTray: boolean;
+  startMinimized: boolean;
+  launchAtLogin: boolean;
+}
+
+export type WatcherRunState = "off" | "idle" | "scanning" | "paused";
+
+export interface WatcherRuntimeState {
+  runState: WatcherRunState;
+  queueDepth: number;
+  currentFile: string | null;
+  currentStartedMs: number | null;
+}
+
+export type WatcherEvent =
+  | { type: "state-changed"; runState: WatcherRunState }
+  | { type: "queue-updated"; depth: number }
+  | { type: "scan-started"; fileName: string; path: string }
+  | {
+      type: "scan-completed";
+      fileName: string;
+      path: string;
+      topSeverity: Severity;
+      signatureCount: number;
+      criticalCount: number;
+      highCount: number;
+      confirmedFamilies: number;
+      sha256: string;
+      flagged: boolean;
+      action: "quarantined" | "trashed" | null;
+    }
+  | { type: "error"; path: string; code: string; message: string }
+  | { type: "focus-review" };
 
 export type ScanPhaseId =
   | "validate"

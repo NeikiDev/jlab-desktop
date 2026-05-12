@@ -41,6 +41,14 @@ pub struct HistoryEntry {
     pub severity_counts: SeverityCounts,
     pub top_severity: String,
     pub signature_count: u32,
+    /// "manual" for drag-drop scans, "watcher" for auto-scans from the
+    /// folder watcher. Older entries without this field load as "manual".
+    #[serde(default = "default_source")]
+    pub source: String,
+}
+
+fn default_source() -> String {
+    "manual".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -255,6 +263,7 @@ pub fn build_entry(
     file_name: &str,
     file_size_bytes: u64,
     sha256: &str,
+    source: &str,
 ) -> HistoryEntry {
     let mut counts = SeverityCounts::default();
     let mut signature_count: u32 = 0;
@@ -307,6 +316,7 @@ pub fn build_entry(
         severity_counts: counts,
         top_severity: top_severity.to_string(),
         signature_count,
+        source: source.to_string(),
     }
 }
 
@@ -320,7 +330,7 @@ fn iso8601_utc(secs: i64, millis: u32) -> String {
     format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}.{millis:03}Z")
 }
 
-// Howard Hinnant's "civil_from_days" — converts days since the Unix epoch
+// Howard Hinnant's "civil_from_days": converts days since the Unix epoch
 // (1970-01-01) into a proleptic Gregorian date. Public-domain algorithm
 // from <https://howardhinnant.github.io/date_algorithms.html>. The shifted
 // epoch (March 1, year 0) lets us handle leap years without per-month
@@ -390,7 +400,7 @@ mod tests {
                 { "severity": "weird" },
             ]
         });
-        let e = build_entry(&scan, "x.jar", 1234, "abcdef0123456789");
+        let e = build_entry(&scan, "x.jar", 1234, "abcdef0123456789", "manual");
         assert_eq!(e.signature_count, 5);
         assert_eq!(e.severity_counts.critical, 2);
         assert_eq!(e.severity_counts.high, 1);
@@ -408,15 +418,15 @@ mod tests {
     #[test]
     fn build_entry_id_unique_for_same_ms_same_file() {
         let scan = serde_json::json!({ "signatures": [] });
-        let a = build_entry(&scan, "x.jar", 0, "abcdef0123456789");
-        let b = build_entry(&scan, "x.jar", 0, "abcdef0123456789");
+        let a = build_entry(&scan, "x.jar", 0, "abcdef0123456789", "manual");
+        let b = build_entry(&scan, "x.jar", 0, "abcdef0123456789", "manual");
         assert_ne!(a.id, b.id, "ids must differ even on same-ms same-file");
     }
 
     #[test]
     fn build_entry_no_signatures() {
         let scan = serde_json::json!({ "signatures": [] });
-        let e = build_entry(&scan, "x.jar", 0, "00");
+        let e = build_entry(&scan, "x.jar", 0, "00", "manual");
         assert_eq!(e.signature_count, 0);
         assert_eq!(e.top_severity, "info");
     }

@@ -10,10 +10,7 @@ interface Props {
 }
 
 /**
- * Click-to-copy chip for a sha256 (or any opaque hex string). Shows a short
- * truncation; on click writes the full value to the clipboard and flashes a
- * "copied" state for ~1.4s. Falls back to `document.execCommand("copy")` if
- * `navigator.clipboard` is unavailable (older WebView, secure-context edge).
+ * Click-to-copy chip for a sha256.
  */
 export default function Sha256Chip({ value, preview = 20, className }: Props) {
   const [copied, setCopied] = useState(false);
@@ -28,10 +25,8 @@ export default function Sha256Chip({ value, preview = 20, className }: Props) {
   if (!value) {
     return (
       <span className="inline-flex items-center gap-1.5">
-        <span className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.16em] text-text-dim">
-          sha256
-        </span>
-        <span className="font-mono text-[11px] text-text-faint">—</span>
+        <span className="text-[10px] font-medium text-text-dim">sha256</span>
+        <span className="font-mono text-[11px] text-text-faint">-</span>
       </span>
     );
   }
@@ -62,19 +57,17 @@ export default function Sha256Chip({ value, preview = 20, className }: Props) {
 
   return (
     <span className={cn("inline-flex items-center gap-1.5", className)}>
-      <span className="font-mono text-[9.5px] font-semibold uppercase tracking-[0.16em] text-text-dim">
-        sha256
-      </span>
+      <span className="text-[10px] font-medium text-text-dim">sha256</span>
       <button
         type="button"
         onClick={copy}
         title={copied ? "Copied" : `Click to copy ${value}`}
         aria-label={copied ? "Copied to clipboard" : `Copy sha256 ${value}`}
         className={cn(
-          "tnum inline-flex max-w-full cursor-pointer items-center gap-1.5 truncate rounded-[3px] border px-1.5 py-[1px] font-mono text-[11px] transition-[background,border-color,color] duration-fast ease-out",
+          "tnum inline-flex max-w-full cursor-pointer items-center gap-1.5 truncate rounded-full border px-2 py-[1px] font-mono text-[11px] transition-[background,border-color,color] duration-fast ease-out",
           copied
-            ? "border-accent bg-accent-soft text-accent"
-            : "border-border-faint bg-bg-inset text-text-muted hover:border-accent hover:text-accent",
+            ? "border-accent/40 bg-accent-soft text-accent"
+            : "border-border-faint bg-bg-inset text-text-muted hover:border-accent/40 hover:text-accent",
         )}
       >
         <span className="truncate">
@@ -93,21 +86,8 @@ export default function Sha256Chip({ value, preview = 20, className }: Props) {
             </svg>
           ) : (
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <rect
-                x="2.6"
-                y="2.6"
-                width="5"
-                height="5"
-                rx="1"
-                stroke="currentColor"
-                strokeWidth="1.1"
-              />
-              <path
-                d="M4 1.5h3.5A1.5 1.5 0 0 1 9 3v3.5"
-                stroke="currentColor"
-                strokeWidth="1.1"
-                strokeLinecap="round"
-              />
+              <rect x="2.6" y="2.6" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.1" />
+              <path d="M4 1.5h3.5A1.5 1.5 0 0 1 9 3v3.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
             </svg>
           )}
         </span>

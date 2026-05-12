@@ -300,6 +300,37 @@ impl ScanJobs {
 
 pub struct HttpClient(pub Client);
 
+/// Where a scan request originated. Manual scans (drag-drop, file picker)
+/// emit phase events to the frontend; watcher auto-scans do not, since the
+/// watcher panel has its own status surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScanSource {
+    Manual,
+    Watcher,
+}
+
+impl ScanSource {
+    pub fn as_history_tag(self) -> &'static str {
+        match self {
+            ScanSource::Manual => "manual",
+            ScanSource::Watcher => "watcher",
+        }
+    }
+}
+
+/// Result of a successful scan. Manual scans wrap this into a JSON envelope
+/// string for the IPC return value; the watcher consumes it directly so it
+/// can decide on coalescing and auto-delete without re-parsing.
+pub struct ScanOutcome {
+    pub scan: serde_json::Value,
+    pub threat_intel: serde_json::Value,
+    pub sha256: String,
+    #[allow(dead_code)]
+    pub upload_name: String,
+    #[allow(dead_code)]
+    pub upload_size: u64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PhaseEvent {
@@ -311,11 +342,15 @@ struct PhaseEvent {
 
 fn emit_phase(
     app: &AppHandle,
+    source: ScanSource,
     started: Instant,
     phase: &'static str,
     status: &'static str,
     detail: Option<String>,
 ) {
+    if source != ScanSource::Manual {
+        return;
+    }
     let payload = PhaseEvent {
         phase,
         status,
@@ -338,42 +373,85 @@ pub async fn scan_jar(
     let cancel = Arc::new(Notify::new());
     jobs.install(&cancel);
 
-    let result = run_scan(&app, &http.0, &cancel, started, path).await;
+    let result = run_scan(&app, &http.0, &cancel, started, path, ScanSource::Manual).await;
 
     jobs.clear_if_current(&cancel);
 
     match &result {
-        Ok(_) => emit_phase(&app, started, "done", "ok", None),
-        Err(AppError::Cancelled) => emit_phase(&app, started, "cancelled", "done", None),
-        Err(e) => emit_phase(&app, started, "failed", "error", Some(e.to_string())),
+        Ok(_) => emit_phase(&app, ScanSource::Manual, started, "done", "ok", None),
+        Err(AppError::Cancelled) => {
+            emit_phase(&app, ScanSource::Manual, started, "cancelled", "done", None)
+        }
+        Err(e) => emit_phase(
+            &app,
+            ScanSource::Manual,
+            started,
+            "failed",
+            "error",
+            Some(e.to_string()),
+        ),
     }
 
-    result
+    result.map(|o| {
+        let envelope = serde_json::json!({
+            "scan": o.scan,
+            "threatIntel": o.threat_intel,
+            "sha256": o.sha256,
+        });
+        envelope.to_string()
+    })
 }
 
-async fn run_scan(
+/// Run a scan and return the parsed outcome. Shared by the manual `scan_jar`
+/// command and the folder watcher. The watcher passes `ScanSource::Watcher`
+/// to suppress phase events and to tag the history entry.
+pub async fn run_scan(
     app: &AppHandle,
     client: &Client,
     cancel: &Arc<Notify>,
     started: Instant,
     path: String,
-) -> Result<String, AppError> {
-    emit_phase(app, started, "validate", "running", None);
+    source: ScanSource,
+) -> Result<ScanOutcome, AppError> {
+    emit_phase(app, source, started, "validate", "running", None);
     let p = Path::new(&path);
     let metadata = tokio::fs::metadata(p).await?;
+    // `metadata.len()` is only reliable for regular files. A symlink to
+    // `/dev/zero`, a FIFO with a live writer, or a character device reports
+    // 0 (or an arbitrary large number) and would slip past the 50 MB cap,
+    // causing the later read to grow until the host is OOM-killed. Reject
+    // anything that is not a plain file before any size check or read.
+    if !metadata.is_file() {
+        let ext = extension_lower(p);
+        return Err(AppError::UnsupportedFile {
+            extension: ext,
+            allowed: allowed_exts(),
+        });
+    }
     if metadata.len() > MAX_BYTES {
         return Err(AppError::TooLarge {
             max_mb: MAX_BYTES / (1024 * 1024),
         });
     }
     let size = metadata.len();
-    let file_name = p
+
+    // The watcher's "hold until scanned" feature renames the file to add a
+    // `.jlab-pending` suffix while the scan is in flight. The file is on
+    // disk at the suffixed path, but for extension validation and for the
+    // multipart upload's filename we want the original name.
+    let logical_path = path
+        .strip_suffix(crate::watcher::core::HOLD_SUFFIX)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| p.to_path_buf());
+    let logical_p: &Path = logical_path.as_path();
+
+    let file_name = logical_p
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("upload.jar")
         .to_string();
 
-    let ext = extension_lower(p);
+    let ext = extension_lower(logical_p);
     let ext_str = ext.as_deref().unwrap_or("");
     if !SUPPORTED_EXTS.contains(&ext_str) {
         return Err(AppError::UnsupportedFile {
@@ -389,13 +467,14 @@ async fn run_scan(
     );
     emit_phase(
         app,
+        source,
         started,
         "validate",
         "done",
         Some(format!("{size} bytes, .{ext_str}")),
     );
 
-    emit_phase(app, started, "read", "running", None);
+    emit_phase(app, source, started, "read", "running", None);
     let read_started = Instant::now();
 
     let (bytes, upload_name) = if is_container {
@@ -438,6 +517,7 @@ async fn run_scan(
         );
         emit_phase(
             app,
+            source,
             started,
             "read",
             "done",
@@ -470,6 +550,7 @@ async fn run_scan(
         }
         emit_phase(
             app,
+            source,
             started,
             "read",
             "done",
@@ -497,6 +578,7 @@ async fn run_scan(
     log::info!("POST {ENDPOINT} ({upload_size} bytes)");
     emit_phase(
         app,
+        source,
         started,
         "upload",
         "running",
@@ -560,6 +642,7 @@ async fn run_scan(
     );
     emit_phase(
         app,
+        source,
         started,
         "upload",
         "done",
@@ -574,12 +657,13 @@ async fn run_scan(
         StatusCode::OK => {
             emit_phase(
                 app,
+                source,
                 started,
                 "server",
                 "done",
                 Some(format!("HTTP {}", status.as_u16())),
             );
-            emit_phase(app, started, "parse", "running", None);
+            emit_phase(app, source, started, "parse", "running", None);
             let body_fut = response.bytes();
             let body = tokio::select! {
                 biased;
@@ -589,13 +673,18 @@ async fn run_scan(
                     AppError::InvalidResponse { message: format!("read body: {e}") }
                 })?,
             };
+            let body_len = body.len();
             log::info!(
-                "scan ok body={} bytes elapsed={}ms",
-                body.len(),
+                "scan ok body={body_len} bytes elapsed={}ms",
                 started.elapsed().as_millis()
             );
 
-            let text = String::from_utf8(body.to_vec()).map_err(|e| {
+            // Parse straight from the `Bytes` buffer. `String::from_utf8`
+            // on `body.to_vec()` used to make a second full copy and held
+            // both the `Vec<u8>` and the resulting `String` alive at the
+            // same time. `str::from_utf8` only borrows, keeping the peak
+            // at one body buffer.
+            let text = std::str::from_utf8(&body).map_err(|e| {
                 log::error!("body is not valid UTF-8: {e}");
                 AppError::InvalidResponse {
                     message: format!("non-utf8 body: {e}"),
@@ -603,14 +692,15 @@ async fn run_scan(
             })?;
             emit_phase(
                 app,
+                source,
                 started,
                 "parse",
                 "done",
-                Some(format!("{} bytes", text.len())),
+                Some(format!("{body_len} bytes")),
             );
 
             let scan_value: serde_json::Value =
-                serde_json::from_str(&text).map_err(|e| AppError::InvalidResponse {
+                serde_json::from_str(text).map_err(|e| AppError::InvalidResponse {
                     message: format!("scan json: {e}"),
                 })?;
 
@@ -618,24 +708,35 @@ async fn run_scan(
             // scan if disk IO is misbehaving: log and move on so the user
             // still sees their result.
             let store: HistoryStore = (*app.state::<HistoryStore>()).clone();
-            let entry =
-                history::build_entry(&scan_value, &upload_name, upload_size as u64, &sha256);
+            let entry = history::build_entry(
+                &scan_value,
+                &upload_name,
+                upload_size as u64,
+                &sha256,
+                source.as_history_tag(),
+            );
             if let Err(e) = history::append(store, entry).await {
                 log::warn!("history append failed: {e}");
             }
 
-            let envelope = serde_json::json!({
-                "scan": scan_value,
-                "threatIntel": threat_intel,
-                "sha256": sha256,
-            });
-            serde_json::to_string(&envelope).map_err(|e| AppError::InvalidResponse {
-                message: format!("envelope: {e}"),
+            Ok(ScanOutcome {
+                scan: scan_value,
+                threat_intel,
+                sha256,
+                upload_name,
+                upload_size: upload_size as u64,
             })
         }
         StatusCode::PAYLOAD_TOO_LARGE => {
             log::warn!("scan rejected by server: 413 too large");
-            emit_phase(app, started, "server", "error", Some("HTTP 413".into()));
+            emit_phase(
+                app,
+                source,
+                started,
+                "server",
+                "error",
+                Some("HTTP 413".into()),
+            );
             Err(AppError::TooLarge {
                 max_mb: MAX_BYTES / (1024 * 1024),
             })
@@ -650,6 +751,7 @@ async fn run_scan(
             log::warn!("rate limited, retry-after={retry_after}s");
             emit_phase(
                 app,
+                source,
                 started,
                 "server",
                 "error",
@@ -669,6 +771,7 @@ async fn run_scan(
             log::error!("non-OK status {} message={message}", s.as_u16());
             emit_phase(
                 app,
+                source,
                 started,
                 "server",
                 "error",
@@ -923,6 +1026,8 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), AppError> {
         || url.starts_with("https://threat.rip/")
         || url.starts_with("https://jlab.threat.rip/")
         || url.starts_with("https://www.virustotal.com/")
+        || url.starts_with("https://discord.gg/")
+        || url.starts_with("https://discord.com/invite/")
         || is_github_repo_url(&url);
     if !allowed {
         return Err(AppError::Network {

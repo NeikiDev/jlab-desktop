@@ -2,6 +2,7 @@ mod api;
 mod error;
 mod history;
 mod paths;
+mod watcher;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -142,7 +143,7 @@ pub fn run() {
     }
 
     // Point the log plugin at the friendly folder. If the platform
-    // resolver fails (no HOME / USERPROFILE / APPDATA — extremely rare),
+    // resolver fails (no HOME / USERPROFILE / APPDATA, extremely rare),
     // fall back to Tauri's default `LogDir` so logging still works.
     let log_target = match friendly_log.clone() {
         Some(path) => Target::new(TargetKind::Folder {
@@ -167,6 +168,11 @@ pub fn run() {
         .plugin(log_plugin)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(api::ScanJobs::default())
         .manage(api::HttpClient(http))
         .setup(move |app| {
@@ -246,7 +252,49 @@ pub fn run() {
                     return Err(Box::new(e));
                 }
             }
-            app.manage(history::HistoryStore::new(data_dir));
+            app.manage(history::HistoryStore::new(data_dir.clone()));
+            // Watcher state. Always managed so the frontend can query
+            // settings before the user enables anything. The watcher itself
+            // only spins up if `enabled` is persisted as true.
+            let settings_store = watcher::settings::SettingsStore::new(data_dir.clone());
+            let watcher_store = watcher::WatcherStore::new(settings_store);
+            app.manage(watcher_store.clone());
+
+            // Resume the watcher and reconcile autolaunch on startup.
+            let initial = watcher_store.snapshot_settings();
+            if initial.minimize_to_tray {
+                if let Err(e) = watcher::tray::ensure_tray(app.handle()) {
+                    log::warn!("tray init skipped: {e}");
+                }
+            }
+            if initial.enabled {
+                if let Err(e) = watcher_store.start(app.handle()) {
+                    log::warn!("watcher start on boot failed: {e}");
+                }
+            }
+            // Best-effort autolaunch reconcile. We do not surface failures
+            // to the user; an old launch agent that no longer matches just
+            // gets re-applied next time the toggle is touched.
+            use tauri_plugin_autostart::ManagerExt;
+            let autolaunch = app.autolaunch();
+            let is_enabled = autolaunch.is_enabled().unwrap_or(false);
+            if initial.launch_at_login != is_enabled {
+                let res = if initial.launch_at_login {
+                    autolaunch.enable()
+                } else {
+                    autolaunch.disable()
+                };
+                if let Err(e) = res {
+                    log::warn!("autolaunch reconcile failed: {e}");
+                }
+            }
+            // Apply start-minimized if it lines up with minimize-to-tray.
+            if initial.start_minimized && initial.minimize_to_tray {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
+
             let log_dir = friendly_log
                 .clone()
                 .or_else(|| app.path().app_log_dir().ok());
@@ -259,6 +307,17 @@ pub fn run() {
             }
             log::info!("jlab-desktop {} started", env!("CARGO_PKG_VERSION"));
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                if let Some(store) = app.try_state::<watcher::WatcherStore>() {
+                    if store.snapshot_settings().minimize_to_tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             api::scan_jar,
@@ -274,6 +333,27 @@ pub fn run() {
             api::history_clear,
             api::history_delete,
             api::history_cap,
+            watcher::commands::watcher_get_settings,
+            watcher::commands::watcher_get_runtime_state,
+            watcher::commands::watcher_set_enabled,
+            watcher::commands::watcher_acknowledge_warning,
+            watcher::commands::watcher_add_folder,
+            watcher::commands::watcher_remove_folder,
+            watcher::commands::watcher_set_notifications,
+            watcher::commands::watcher_set_alert_threshold,
+            watcher::commands::watcher_set_multiple_criticals_threshold,
+            watcher::commands::watcher_set_auto_action,
+            watcher::commands::watcher_set_auto_action_mode,
+            watcher::commands::watcher_set_hold,
+            watcher::commands::watcher_set_rescan,
+            watcher::commands::watcher_set_tray,
+            watcher::commands::watcher_set_start_minimized,
+            watcher::commands::watcher_set_launch_at_login,
+            watcher::commands::watcher_scan_all_now,
+            watcher::commands::watcher_show_in_folder,
+            watcher::commands::watcher_open_quarantine_dir,
+            watcher::commands::watcher_pick_folder,
+            watcher::commands::watcher_reset_to_defaults,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

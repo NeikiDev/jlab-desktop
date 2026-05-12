@@ -39,6 +39,25 @@ pub enum AppError {
 
     #[error("history storage error: {message}")]
     HistoryIo { message: String },
+
+    #[error("watcher io error: {message}")]
+    WatcherIo { message: String },
+
+    #[error("invalid watch path: {message}")]
+    InvalidWatchPath { message: String },
+
+    #[error("could not move file to trash: {message}")]
+    TrashFailed { message: String },
+
+    #[error("could not rename file: {message}")]
+    RenameFailed { message: String },
+
+    #[error("watcher is disabled")]
+    WatcherDisabled,
+
+    #[error("notifications were not permitted by the operating system")]
+    #[allow(dead_code)]
+    NotificationDenied,
 }
 
 impl From<std::io::Error> for AppError {
