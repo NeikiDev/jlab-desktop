@@ -103,7 +103,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Outbound API requests now identify with `x-jlab-client: desktop` instead of `web`, so the JLab server can tell desktop traffic from the public web client.
-- RatterScanner threat-intel card rebuilt around the new server response shape (`safe`, `malicious`, `automatedSafe`, `hash`, optional `githubInfo`). Verified projects link straight to the upstream GitHub repo.
+- RatterScanner threat-intel card rebuilt around the new server response shape (`safe`, `malicious`, `automated_safe`, `hash`, optional `githubInfo`). Verified projects link straight to the upstream GitHub repo.
 - Threat-intel parse path rewritten for diagnostics: full `std::error::Error` source chain, status code, content-type, content-encoding, body length, and a 256-byte snippet are logged on parse failure. The shared `reqwest` client now negotiates `gzip` and `brotli`; the threat-intel call asks for `identity` to sidestep transient decompression issues for that small body. The threat-intel timeout was raised from 15s to 60s to absorb upstream cold-start lookups (RatterScanner / VirusTotal).
 - "Clear logs" now also truncates the active `debug.log` in addition to removing rotated files. Previously the active file was left untouched, so users could not actually free its bytes from the UI.
 - API rate-limit references updated from 5 to 15 requests per minute per IP, matching the current public quota.
