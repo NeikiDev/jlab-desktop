@@ -102,10 +102,16 @@ fn verify_fallback_dir_security(path: &std::path::Path) -> Result<(), error::App
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Client default needs headroom for a 50 MB scan upload over a slow link.
+    // 200 KB/s (saturated home Wi-Fi, rural DSL) needs ~250s for the body
+    // alone, so the old 120s ceiling failed before the upload finished and
+    // surfaced a generic network error to the user (#69). 300s keeps slow
+    // but steady uploads alive; threat-intel and releases override with
+    // their own tighter per-call timeouts.
     let http = reqwest::Client::builder()
         .user_agent(concat!("jlab-desktop/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(300))
         .gzip(true)
         .brotli(true)
         .build()
