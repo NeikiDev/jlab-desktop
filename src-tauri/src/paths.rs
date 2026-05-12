@@ -122,9 +122,13 @@ pub fn migrate_history_file(
     Ok(true)
 }
 
-/// One-shot migration of any `debug*` log files (active + rotated) from the
+/// One-shot migration of `debug*.log` files (active + rotated) from the
 /// legacy folder. Idempotent. Per-file: skip if the same name already exists
 /// in the target. Other files in the legacy log dir are left alone.
+///
+/// Match rule: the file name must start with `debug` AND end with `.log`.
+/// This rejects unrelated files like `debug-notes.txt` or `debugger.cfg`
+/// that happen to share the prefix.
 ///
 /// Returns the number of files moved.
 pub fn migrate_log_files(
@@ -142,7 +146,7 @@ pub fn migrate_log_files(
         let Some(name_str) = name.to_str() else {
             continue;
         };
-        if !name_str.starts_with("debug") {
+        if !name_str.starts_with("debug") || !name_str.ends_with(".log") {
             continue;
         }
         let src = entry.path();
@@ -233,6 +237,9 @@ mod tests {
         fs::write(legacy.join("debug.log"), b"a").unwrap();
         fs::write(legacy.join("debug_2.log"), b"b").unwrap();
         fs::write(legacy.join("other.log"), b"c").unwrap();
+        // Starts with "debug" but is not a log file. Must not be moved.
+        fs::write(legacy.join("debug-notes.txt"), b"d").unwrap();
+        fs::write(legacy.join("debugger.cfg"), b"e").unwrap();
 
         let moved = migrate_log_files(&legacy, &target).unwrap();
         assert_eq!(moved, 2);
@@ -240,6 +247,10 @@ mod tests {
         assert!(target.join("debug_2.log").exists());
         assert!(!target.join("other.log").exists());
         assert!(legacy.join("other.log").exists());
+        assert!(!target.join("debug-notes.txt").exists());
+        assert!(legacy.join("debug-notes.txt").exists());
+        assert!(!target.join("debugger.cfg").exists());
+        assert!(legacy.join("debugger.cfg").exists());
 
         // Idempotent.
         let again = migrate_log_files(&legacy, &target).unwrap();
