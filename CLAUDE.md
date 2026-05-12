@@ -47,9 +47,10 @@ src/                    React frontend
 src-tauri/              Rust shell
   src/
     main.rs             Thin entry; calls lib::run()
-    lib.rs              tauri::Builder, plugin + command registration,
-                        watcher store + tray + close-requested hook +
-                        autostart reconcile
+    lib.rs              tauri::Builder, single-instance plugin (first),
+                        plugin + command registration, watcher store +
+                        tray + close-requested hook + autostart reconcile,
+                        Windows AUMID register + bind at startup
     api.rs              scan_jar (manual command), run_scan (shared
                         helper for manual + watcher), check_status,
                         open_url, history commands
@@ -57,6 +58,10 @@ src-tauri/              Rust shell
     history.rs          history.json store (atomic writes, schema v1)
     paths.rs            Friendly per-OS data + log dir resolver
     watcher/            Folder watcher subsystem (see below)
+    windows_aumid.rs    Windows-only: HKCU AUMID registration +
+                        SetCurrentProcessExplicitAppUserModelID so toasts
+                        actually render (Action Center drops toasts whose
+                        AUMID is not known to the Shell)
   capabilities/         Tauri 2 permission scopes
   tauri.conf.json       Bundle config (DMG/APP/MSI/NSIS), CSP, window
 TODO/                   Tracked via /todo skill

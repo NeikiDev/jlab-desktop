@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-12
+
+### Fixed
+
+- Windows toast notifications now actually appear. The watcher's coalesced alert and the "Send test notification" button were both no-ops on every Windows install because the Action Center silently drops toasts unless the app's `AppUserModelID` is known to the Shell. The Tauri WiX template puts `System.AppUserModel.ID` on the Start menu shortcut, but Windows 10/11 still expects the AUMID to be registered in `HKCU\Software\Classes\AppUserModelId\<aumid>` with at least a `DisplayName`, and to be bound to the process. JLab now does both at startup (in `src-tauri/src/windows_aumid.rs`): it writes the registry entry idempotently and calls `SetCurrentProcessExplicitAppUserModelID("rip.threat.jlab-desktop")` before any window or notification work. Toasts fire from MSI installs (Start menu, desktop shortcut, taskbar pin, direct exe), portable copies, and `tauri dev`. macOS and Linux are unaffected; the new code is `#[cfg(target_os = "windows")]`.
+- Double-clicking the shortcut, the taskbar pin, or the executable no longer spawns a second JLab process. The build now registers `tauri-plugin-single-instance` as the first plugin in the Tauri builder. A duplicate launch is intercepted before any window or watcher work runs; the callback in the live process unminimizes, shows, and focuses the existing main window. Without this two processes would both poll `watcher-settings.json` and clobber each other's atomic writes, and both would receive the same OS filesystem events for the watched folders.
+
 ## [0.5.1] - 2026-05-12
 
 ### Added
@@ -173,7 +180,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 The first public release. Initial macOS (universal) and Windows (MSI) builds.
 
-[Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/NeikiDev/jlab-desktop/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.5.2
+[0.5.1]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.5.1
 [0.5.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.5.0
 [0.4.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.4.0
 [0.3.0]: https://github.com/NeikiDev/jlab-desktop/releases/tag/v0.3.0

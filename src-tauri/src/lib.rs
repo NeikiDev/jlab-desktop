@@ -4,6 +4,15 @@ mod history;
 mod paths;
 mod watcher;
 
+#[cfg(target_os = "windows")]
+mod windows_aumid;
+
+/// Windows AppUserModelID. Must match `identifier` in `tauri.conf.json` so
+/// the toast AUMID set by `tauri-plugin-notification` matches the one we
+/// register in HKCU and bind to the process at startup.
+#[cfg(target_os = "windows")]
+const APP_AUMID: &str = "rip.threat.jlab-desktop";
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -102,6 +111,27 @@ fn verify_fallback_dir_security(path: &std::path::Path) -> Result<(), error::App
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Buffer for warnings that fire before the log plugin is up. Replayed
+    // via `log::warn!` inside the `setup` callback. On Windows packaged
+    // builds (`windows_subsystem = "windows"`) this is the only way they
+    // reach `debug.log`, since stderr is detached.
+    let mut deferred_warnings: Vec<String> = Vec::new();
+
+    // Windows: register our AUMID in HKCU and bind it to this process before
+    // any UI work. Without this the Action Center silently drops every
+    // toast we send (the plugin still returns Ok), so both the watcher's
+    // coalesced alert and the "send test notification" button look broken.
+    // See `windows_aumid.rs` for the full story.
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(e) = windows_aumid::register_aumid(APP_AUMID, "JLab Desktop", None) {
+            deferred_warnings.push(format!("aumid registry write failed: {e}"));
+        }
+        if let Err(e) = windows_aumid::bind_process_aumid(APP_AUMID) {
+            deferred_warnings.push(format!("aumid process bind failed: {e}"));
+        }
+    }
+
     // Client default needs headroom for a 50 MB scan upload over a slow link.
     // 200 KB/s (saturated home Wi-Fi, rural DSL) needs ~250s for the body
     // alone, so the old 120s ceiling failed before the upload finished and
@@ -135,16 +165,14 @@ pub fn run() {
     let friendly_log = paths::friendly_log_dir();
     let friendly_data = paths::friendly_data_dir();
 
-    let mut deferred_migration_warnings: Vec<String> = Vec::new();
-
     if let (Some(legacy), Some(target)) = (paths::legacy_log_dir(), friendly_log.as_ref()) {
         if let Err(e) = paths::migrate_log_files(&legacy, target) {
-            deferred_migration_warnings.push(format!("log migration skipped: {e}"));
+            deferred_warnings.push(format!("log migration skipped: {e}"));
         }
     }
     if let (Some(legacy), Some(target)) = (paths::legacy_data_dir(), friendly_data.as_ref()) {
         if let Err(e) = paths::migrate_history_file(&legacy, target) {
-            deferred_migration_warnings.push(format!("history migration skipped: {e}"));
+            deferred_warnings.push(format!("history migration skipped: {e}"));
         }
     }
 
@@ -170,7 +198,26 @@ pub fn run() {
         .targets([Target::new(TargetKind::Stderr), log_target])
         .build();
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Must be the first plugin so a duplicate launch is intercepted before
+    // any window or watcher work runs (per the tauri-plugin-single-instance
+    // README). The callback runs in the already-live process; we surface the
+    // existing main window so a double-click focuses instead of spawning a
+    // second JLab. Without this, two processes would both poll
+    // `watcher-settings.json` and race each other's atomic writes.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }));
+    }
+
+    builder
         .plugin(log_plugin)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -182,10 +229,11 @@ pub fn run() {
         .manage(api::ScanJobs::default())
         .manage(api::HttpClient(http))
         .setup(move |app| {
-            // Replay any pre-logger migration failures now that the log
-            // plugin is up. On Windows packaged builds this is the only
-            // path that reaches the user (no stderr console attached).
-            for warning in &deferred_migration_warnings {
+            // Replay any pre-logger warnings (migration, Windows AUMID
+            // setup) now that the log plugin is up. On Windows packaged
+            // builds this is the only path that reaches the user, since
+            // `windows_subsystem = "windows"` detaches stderr.
+            for warning in &deferred_warnings {
                 log::warn!("{warning}");
             }
 
