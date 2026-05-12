@@ -53,30 +53,33 @@ jobs:
       - name: Gate against existing tag
         id: gate
         shell: bash
+        env:
+          TAG: ${{ steps.read.outputs.tag }}
+          FORCE: ${{ github.event.inputs.force }}
         run: |
           set -euo pipefail
-          tag="${{ steps.read.outputs.tag }}"
-          force="${{ github.event.inputs.force }}"
-          if git rev-parse "$tag" >/dev/null 2>&1; then
-            if [ "$force" = "true" ]; then
-              echo "Tag $tag exists but force=true, releasing anyway."
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            if [ "$FORCE" = "true" ]; then
+              echo "Tag $TAG exists but force=true, releasing anyway."
               echo "should_release=true" >> "$GITHUB_OUTPUT"
             else
-              echo "Tag $tag already exists. Skipping."
+              echo "Tag $TAG already exists. Skipping."
               echo "should_release=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "Tag $tag does not exist. Releasing."
+            echo "Tag $TAG does not exist. Releasing."
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract changelog section
         id: changelog
         shell: bash
+        env:
+          VERSION: ${{ steps.read.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          version="${{ steps.read.outputs.version }}"
-          body=$(awk -v v="$version" '
+          body=$(awk -v v="$VERSION" '
             /^## \[/ {
               if (in_block) { exit }
               if ($0 ~ "^## \\[" v "\\]") { in_block = 1; next }
@@ -85,17 +88,17 @@ jobs:
             in_block { print }
           ' CHANGELOG.md | sed -e ':a' -e '/./,$!d;/^$/N;/\n$/ba')
           if [ -z "$body" ]; then
-            body="Release v$version. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details."
+            body="Release v$VERSION. See [CHANGELOG.md](https://github.com/$REPO/blob/main/CHANGELOG.md) for details."
           fi
           {
             echo "body<<CHANGELOG_EOF"
-            echo "## JLab Desktop v$version"
+            echo "## JLab Desktop v$VERSION"
             echo
             echo "$body"
             echo
             echo "---"
             echo
-            echo "Full history: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)"
+            echo "Full history: [CHANGELOG.md](https://github.com/$REPO/blob/main/CHANGELOG.md)"
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
