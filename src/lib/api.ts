@@ -613,6 +613,10 @@ export async function watcherResetToDefaults(): Promise<WatcherSettings> {
   return await invoke<WatcherSettings>("watcher_reset_to_defaults");
 }
 
+export async function watcherSendTestNotification(): Promise<void> {
+  await invoke<void>("watcher_send_test_notification");
+}
+
 type WatcherHandler = (event: WatcherEvent) => void;
 
 const watcherHandlers = new Set<WatcherHandler>();

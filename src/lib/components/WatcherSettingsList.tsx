@@ -9,6 +9,7 @@ import type {
 import {
   watcherOpenQuarantineDir,
   watcherResetToDefaults,
+  watcherSendTestNotification,
   watcherSetAlertThreshold,
   watcherSetAutoAction,
   watcherSetAutoActionMode,
@@ -93,12 +94,10 @@ export default function WatcherSettingsList({ settings, onUpdated, onError }: Pr
       </header>
 
       <div className="grid gap-2.5 grid-cols-1 min-[600px]:grid-cols-2 min-[1180px]:grid-cols-3">
-        <SwitchTile
-          icon={<BellIcon />}
-          title="Notifications"
-          description="Show a native OS toast when a scan crosses your alert threshold. Hits inside a 4 second window combine into one toast."
-          value={settings.notificationsEnabled}
+        <NotificationsTile
+          enabled={settings.notificationsEnabled}
           onChange={handle(watcherSetNotifications)}
+          onError={onError}
         />
 
         <SegmentTile
@@ -335,6 +334,107 @@ function Tile({ icon, title, description, children, active, danger, tone, disabl
 
       <p className="m-0 text-[13px] leading-[1.55] text-text-muted">{description}</p>
     </div>
+  );
+}
+
+interface NotificationsTileProps {
+  enabled: boolean;
+  onChange: (v: boolean) => void;
+  onError: (msg: string) => void;
+}
+
+function NotificationsTile({ enabled, onChange, onError }: NotificationsTileProps) {
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!sent) return;
+    timerRef.current = window.setTimeout(() => setSent(false), 3500);
+    return () => {
+      if (timerRef.current) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [sent]);
+
+  async function sendTest() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await watcherSendTestNotification();
+      setSent(true);
+    } catch (e) {
+      onError(
+        "Test notification was blocked by the operating system. Check the OS notification settings for JLab Desktop, then try again.",
+      );
+      console.warn("[watcher] test notification failed", e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Tile
+      icon={<BellIcon />}
+      title="Notifications"
+      description="Show a native OS toast when a scan crosses your alert threshold. Hits inside a 4 second window combine into one toast. Use the test button to verify the OS lets toasts through."
+      active={enabled}
+      tone="ok"
+    >
+      <div className="flex w-full flex-col gap-2">
+        <div className="flex w-full items-center justify-between gap-3">
+          <span
+            className={cn(
+              "text-[13px] font-semibold uppercase tracking-[0.06em]",
+              enabled ? "text-status-ok" : "text-text-faint",
+            )}
+          >
+            {enabled ? "On" : "Off"}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            aria-label="Notifications"
+            onClick={() => onChange(!enabled)}
+            className={cn(
+              "relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer items-center rounded-full border transition-[background,border-color] duration-base ease-out",
+              enabled
+                ? "border-status-ok-edge bg-status-ok-soft"
+                : "border-border-faint bg-bg-inset",
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "absolute h-[16px] w-[16px] rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.4)] transition-[transform,background] duration-base ease-out",
+                enabled ? "left-[21px] bg-status-ok" : "left-[3px] bg-text-faint",
+              )}
+            />
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => void sendTest()}
+          disabled={busy}
+          className={cn(
+            "inline-flex w-full cursor-pointer items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-border-faint bg-bg-inset px-3 py-2 text-left transition-[background,border-color,color] duration-fast ease-out",
+            busy
+              ? "cursor-not-allowed opacity-60"
+              : "hover:border-status-ok-edge hover:bg-status-ok-soft/40 hover:text-status-ok",
+          )}
+        >
+          <span className="text-[13px] font-medium text-text-muted">
+            {sent ? "Sent. Look for a toast." : busy ? "Sending…" : "Send test notification"}
+          </span>
+          <span aria-hidden="true" className="text-[15px] leading-none text-text-faint">
+            &rsaquo;
+          </span>
+        </button>
+      </div>
+    </Tile>
   );
 }
 

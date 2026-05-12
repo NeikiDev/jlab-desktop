@@ -368,6 +368,14 @@ pub async fn watcher_reset_to_defaults(
     Ok(updated)
 }
 
+/// Fire a single notification immediately. Bypasses the alert threshold,
+/// the coalescing window, and the watcher's enabled state so the user can
+/// confirm the OS is willing to draw a toast for this app.
+#[tauri::command]
+pub fn watcher_send_test_notification(app: AppHandle) -> Result<(), AppError> {
+    crate::watcher::notify::send_test_notification(&app)
+}
+
 #[tauri::command]
 pub async fn watcher_pick_folder(app: AppHandle) -> Result<Option<String>, AppError> {
     use tauri_plugin_dialog::DialogExt;
