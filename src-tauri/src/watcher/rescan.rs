@@ -72,7 +72,7 @@ pub async fn tick_once(store: &WatcherStore, app: &AppHandle) {
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_ascii_lowercase());
-                if ext.as_deref() != Some("jar") {
+                if !matches!(ext.as_deref(), Some("jar" | "zip" | "mcpack" | "mrpack")) {
                     continue;
                 }
                 // Find newest history entry for this file by name.
