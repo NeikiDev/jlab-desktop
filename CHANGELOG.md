@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Windows: NSIS `.exe` setup installer alongside the existing MSI. `JLab.Desktop_x.y.z_x64-setup.exe` is now attached to every GitHub Release in addition to `JLab.Desktop_x.y.z_x64_en-US.msi`. The NSIS installer is configured for per-user install (`installMode: "currentUser"`), so a normal user can install JLab without triggering a UAC prompt and the install goes under `%LOCALAPPDATA%\Programs\JLab Desktop\` instead of `Program Files\`. This matches the existing per-user data and log folders (`%APPDATA%\JLab\`, `%LOCALAPPDATA%\JLab\logs\`), so an install never leaves state behind in two scopes. The MSI is retained for IT-managed deployments via Group Policy, Intune, or SCCM. README's Download section now lists both artifacts and explains which one to pick. Both installers are still unsigned, so Windows SmartScreen behavior is unchanged.
+
 ## [0.5.3] - 2026-05-13
 
 ### Added
