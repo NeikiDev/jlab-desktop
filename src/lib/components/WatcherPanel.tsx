@@ -23,6 +23,7 @@ import { cn } from "../cn";
 
 interface Props {
   onBack: () => void;
+  apiOnline: boolean;
 }
 
 const RUNTIME_DEFAULT: WatcherRuntimeState = {
@@ -32,7 +33,7 @@ const RUNTIME_DEFAULT: WatcherRuntimeState = {
   currentStartedMs: null,
 };
 
-export default function WatcherPanel({ onBack }: Props) {
+export default function WatcherPanel({ onBack, apiOnline }: Props) {
   const [settings, setSettings] = useState<WatcherSettings | null>(null);
   const [runtime, setRuntime] = useState<WatcherRuntimeState>(RUNTIME_DEFAULT);
   const [showWarning, setShowWarning] = useState(false);
@@ -92,6 +93,8 @@ export default function WatcherPanel({ onBack }: Props) {
             signatureCount: ev.signatureCount,
             flagged: ev.flagged,
             action: ev.action,
+            reappeared: ev.reappeared ?? false,
+            priorAction: ev.priorAction ?? null,
             at: Date.now(),
           };
           recentRef.current = [item, ...recentRef.current].slice(0, 20);
@@ -150,7 +153,11 @@ export default function WatcherPanel({ onBack }: Props) {
     }
   }, [handleError, refreshRuntime]);
 
-  const status = useMemo(() => deriveStatus(settings, runtime.runState), [settings, runtime.runState]);
+  const status = useMemo(
+    () => deriveStatus(settings, runtime.runState, apiOnline),
+    [settings, runtime.runState, apiOnline],
+  );
+  const apiDown = (settings?.enabled ?? false) && !apiOnline;
 
   if (!settings) {
     return (
@@ -178,6 +185,8 @@ export default function WatcherPanel({ onBack }: Props) {
       {error && (
         <ErrorBar message={error} onDismiss={() => setError(null)} />
       )}
+
+      {apiDown && <ApiDownBanner holdEnabled={settings.holdUntilScanned} />}
 
       <div
         className={cn(
@@ -227,11 +236,15 @@ export default function WatcherPanel({ onBack }: Props) {
   );
 }
 
+type StatusTone = "off" | "idle" | "scanning" | "paused" | "api_down";
+
 function deriveStatus(
   settings: WatcherSettings | null,
   runState: WatcherRunState,
-): { label: string; tone: "off" | "idle" | "scanning" | "paused" } {
+  apiOnline: boolean,
+): { label: string; tone: StatusTone } {
   if (!settings || !settings.enabled) return { label: "Off", tone: "off" };
+  if (!apiOnline) return { label: "API offline", tone: "api_down" };
   if (runState === "scanning") return { label: "Scanning", tone: "scanning" };
   if (runState === "paused") return { label: "Paused", tone: "paused" };
   return { label: "Active", tone: "idle" };
@@ -240,7 +253,7 @@ function deriveStatus(
 interface HeroProps {
   enabled: boolean;
   folderCount: number;
-  status: { label: string; tone: "off" | "idle" | "scanning" | "paused" };
+  status: { label: string; tone: StatusTone };
   showInfo: boolean;
   onInfoToggle: () => void;
   onToggle: () => void;
@@ -288,7 +301,9 @@ function HeroCard({ enabled, folderCount, status, showInfo, onInfoToggle, onTogg
               ? "border-border-faint text-text-faint"
               : status.tone === "paused"
                 ? "border-sev-medium-edge text-sev-medium"
-                : "border-status-ok/40 text-status-ok",
+                : status.tone === "api_down"
+                  ? "border-[color:var(--color-sev-critical-edge)] bg-sev-critical-soft text-sev-critical"
+                  : "border-status-ok/40 text-status-ok",
           )}
         >
           {status.label}
@@ -354,6 +369,48 @@ function BackLink({ onBack }: { onBack: () => void }) {
       </svg>
       Back
     </button>
+  );
+}
+
+function ApiDownBanner({ holdEnabled }: { holdEnabled: boolean }) {
+  return (
+    <div className="flex items-start gap-3 rounded-[var(--radius-sm)] border border-[color:var(--color-sev-critical-edge)] bg-sev-critical-soft px-4 py-3 text-[14px] text-text animate-fade-in">
+      <span
+        aria-hidden="true"
+        className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sev-critical text-bg"
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path
+            d="M6 2v4M6 8.5v.5"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+          />
+        </svg>
+      </span>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <div className="text-[14px] font-semibold text-sev-critical">
+          Scanner offline.
+        </div>
+        <div className="text-[13.5px] text-text-muted">
+          JLab cannot reach jlab.threat.rip, so new files cannot be scanned
+          until the service is back.{" "}
+          {holdEnabled ? (
+            <>
+              New jars are still held with a{" "}
+              <code className="text-text">.jlab-pending</code> suffix so they
+              can't run, and any file matching a previously-known malicious
+              hash is still auto-actioned.
+            </>
+          ) : (
+            <>
+              Any file matching a previously-known malicious hash is still
+              auto-actioned.
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

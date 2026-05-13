@@ -32,6 +32,7 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::api::{run_scan, HttpClient, ScanOutcome, ScanSource};
 use crate::error::AppError;
+use crate::history::{self, HistoryStore};
 use crate::watcher::hold;
 use crate::watcher::notify as wnotify;
 use crate::watcher::quarantine;
@@ -46,6 +47,12 @@ const SUPPORTED_EXTS: &[&str] = &["jar", "zip", "mcpack", "mrpack"];
 pub const HOLD_SUFFIX: &str = ".jlab-pending";
 
 const WATCHER_EVENT: &str = "watcher://event";
+
+/// Max events the qualifier drains from `raw_rx` per batch. Matches the
+/// debouncer channel capacity so a single drag-drop of many jars goes
+/// through one blocking task, renaming every file to `.jlab-pending`
+/// before any path returns to the consumer queue.
+const QUALIFY_BATCH_CAP: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -209,22 +216,46 @@ impl WatcherStore {
             message: format!("create debouncer: {e}"),
         })?;
 
-        // Qualifier task. Reads raw paths, runs the sync `metadata` +
-        // `canonicalize` on the blocking pool, forwards qualified paths
-        // to the consumer queue. Ends naturally when the debouncer is
-        // dropped in `stop()` and `raw_tx` is gone.
+        // Qualifier task. Reads raw paths, runs the sync `metadata`,
+        // `canonicalize`, and (when `hold_until_scanned` is on) the
+        // rename-to-pending on the blocking pool, then forwards qualified
+        // paths to the consumer queue.
+        //
+        // Events are pulled in batches with `recv_many` so that a single
+        // copy-paste of N jars goes through one blocking task and renames
+        // all N back-to-back without an async yield between them. This
+        // closes the window where, say, jar 1 was already renamed to
+        // `.jlab-pending` while jars 2-N were still loadable by a
+        // launcher. Ends naturally when the debouncer is dropped in
+        // `stop()` and `raw_tx` is gone.
         let store_for_qual = self.clone();
         let app_for_qual = app.clone();
         let tx_for_qual = tx.clone();
         tauri::async_runtime::spawn(async move {
-            while let Some(raw_path) = raw_rx.recv().await {
+            let mut batch: Vec<PathBuf> = Vec::with_capacity(QUALIFY_BATCH_CAP);
+            loop {
+                batch.clear();
+                let n = raw_rx.recv_many(&mut batch, QUALIFY_BATCH_CAP).await;
+                if n == 0 {
+                    break;
+                }
                 let store = store_for_qual.clone();
-                let qualified =
-                    tokio::task::spawn_blocking(move || store.qualify_event_path(raw_path))
-                        .await
-                        .ok()
-                        .flatten();
-                if let Some(p) = qualified {
+                let paths = std::mem::take(&mut batch);
+                let qualified: Vec<PathBuf> = match tokio::task::spawn_blocking(move || {
+                    paths
+                        .into_iter()
+                        .filter_map(|p| store.qualify_event_path(p))
+                        .collect()
+                })
+                .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!("qualifier batch task failed: {e}");
+                        continue;
+                    }
+                };
+                for p in qualified {
                     enqueue_sync(&app_for_qual, &tx_for_qual, p);
                 }
             }
@@ -305,7 +336,9 @@ impl WatcherStore {
         Ok(())
     }
 
-    /// Stop the OS watcher and the consumer. Drains in-flight events.
+    /// Stop the OS watcher and the consumer. In-flight events sitting in
+    /// the queue when stop is called are abandoned; re-enable the watcher
+    /// to resume processing.
     pub fn stop(&self, app: &AppHandle) {
         let (kill_consumer, kill_rescan) = {
             let mut s = self.inner.state.lock().unwrap();
@@ -379,8 +412,8 @@ impl WatcherStore {
         if !SUPPORTED_EXTS.contains(&ext.as_str()) {
             return None;
         }
-        let meta = std::fs::metadata(&raw_path).ok()?;
-        if !meta.is_file() {
+        let meta = std::fs::symlink_metadata(&raw_path).ok()?;
+        if !meta.file_type().is_file() {
             return None;
         }
         let mtime = meta.modified().ok()?;
@@ -419,14 +452,36 @@ impl WatcherStore {
 
     /// Enqueue a path for the consumer to scan, bypassing the baseline
     /// check. Used by "Scan all now" and the rescan scheduler.
+    ///
+    /// Applies the same pre-hold rename that `qualify_event_path` uses for
+    /// real-time arrivals: when `hold_until_scanned` is on, the file is
+    /// renamed to add the `.jlab-pending` suffix here, before the consumer
+    /// sees it. Without this, a folder-wide scan would leave every queued
+    /// jar loadable until the consumer task picked it up.
     pub fn force_enqueue(&self, app: &AppHandle, path: PathBuf) {
-        let tx = {
+        let (tx, hold_enabled) = {
             let s = self.inner.state.lock().unwrap();
-            s.queue_tx.clone()
+            (s.queue_tx.clone(), s.settings.hold_until_scanned)
         };
-        if let Some(tx) = tx {
-            enqueue_sync(app, &tx, path);
-        }
+        let Some(tx) = tx else { return };
+
+        let already_held = path.to_string_lossy().ends_with(HOLD_SUFFIX);
+        let final_path = if hold_enabled && !already_held {
+            match hold::rename_to_pending(&path) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!(
+                        "force_enqueue pre-hold rename failed for {}: {e}; queuing original path",
+                        crate::api::redact_path(&path.to_string_lossy())
+                    );
+                    path
+                }
+            }
+        } else {
+            path
+        };
+
+        enqueue_sync(app, &tx, final_path);
     }
 
     fn bump_queue(&self, delta: i64) {
@@ -480,6 +535,14 @@ pub enum WatcherEvent {
         flagged: bool,
         /// `"quarantined"`, `"trashed"`, or `None` when no auto-action ran.
         action: Option<String>,
+        /// `true` when the file was previously quarantined or trashed by the
+        /// watcher and has reappeared in a watched folder. No new action ran;
+        /// the user is just notified. `prior_action` carries the earlier
+        /// label so the UI can say "previously quarantined" vs "deleted".
+        #[serde(default)]
+        reappeared: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prior_action: Option<String>,
     },
     #[serde(rename = "error")]
     Error {
@@ -647,7 +710,28 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
         },
     );
 
-    let outcome = run_internal_scan(app, &scan_path).await;
+    // Known-bad short-circuit: if this exact file content (by SHA-256) has
+    // flagged us before in a way that trips the current auto-action
+    // threshold, replay the action without burning an API request. On a
+    // cache miss the SHA we computed for the lookup is handed back so the
+    // upload path can skip its own hash.
+    let precomputed_sha =
+        match try_replay_known_bad(store, app, &settings, &scan_path, &display_name, is_held).await
+        {
+            ReplayOutcome::Handled => {
+                store.set_scanning(None);
+                emit_event(
+                    app,
+                    &WatcherEvent::StateChanged {
+                        run_state: store.snapshot_runtime().run_state,
+                    },
+                );
+                return;
+            }
+            ReplayOutcome::Miss { precomputed_sha } => precomputed_sha,
+        };
+
+    let outcome = run_internal_scan(app, &scan_path, precomputed_sha).await;
     let mut action_taken: Option<String> = None;
     let mut final_path = scan_path.clone();
 
@@ -739,8 +823,26 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
                     sha256: o.sha256.clone(),
                     flagged: above_alert,
                     action: action_taken.clone(),
+                    reappeared: false,
+                    prior_action: None,
                 },
             );
+
+            // Persist the entry now that we know what action (if any) was
+            // applied. Best-effort: a disk error must not fail the scan
+            // (CLAUDE.md "Local history" section).
+            let history_store: HistoryStore = (*app.state::<HistoryStore>()).clone();
+            let entry = history::build_entry(
+                &o.scan,
+                &o.upload_name,
+                o.upload_size,
+                &o.sha256,
+                ScanSource::Watcher.as_history_tag(),
+                action_taken.clone(),
+            );
+            if let Err(e) = history::append(history_store, entry).await {
+                log::warn!("watcher history append failed: {e}");
+            }
 
             if settings.notifications_enabled && (above_alert || action_taken.is_some()) {
                 wnotify::record_hit(
@@ -754,6 +856,8 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
                         critical_count: critical,
                         family_names: confirmed_family_names(&o.scan),
                         action: action_taken.clone(),
+                        reappeared: false,
+                        prior_action: None,
                     },
                 );
             }
@@ -788,7 +892,11 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
     );
 }
 
-async fn run_internal_scan(app: &AppHandle, path: &Path) -> Result<ScanOutcome, AppError> {
+async fn run_internal_scan(
+    app: &AppHandle,
+    path: &Path,
+    precomputed_sha: Option<String>,
+) -> Result<ScanOutcome, AppError> {
     let client: Client = {
         let http = app.state::<HttpClient>();
         http.0.clone()
@@ -802,6 +910,7 @@ async fn run_internal_scan(app: &AppHandle, path: &Path) -> Result<ScanOutcome, 
         started,
         path.to_string_lossy().into_owned(),
         ScanSource::Watcher,
+        precomputed_sha,
     )
     .await
 }
@@ -917,4 +1026,281 @@ pub fn matches_action(t: &ActionThreshold, critical: u32, families: u32, multi_c
         ActionThreshold::MultipleCriticals => critical >= multi_count.max(2),
         ActionThreshold::ConfirmedFamiliesOnly => families >= 1,
     }
+}
+
+/// Read a file from disk on the blocking pool and return its lowercase
+/// hex SHA-256. Cancels the lookup for files larger than the API's 50 MB
+/// cap (those can't have a matching history entry anyway, and we don't
+/// want to OOM the consumer task on a giant unscanable jar).
+async fn compute_file_sha256(path: &Path) -> Result<String, AppError> {
+    let path_owned = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<String, AppError> {
+        let meta = std::fs::metadata(&path_owned).map_err(|e| AppError::Io {
+            message: e.to_string(),
+        })?;
+        if meta.len() > crate::api::MAX_BYTES {
+            return Err(AppError::TooLarge {
+                max_mb: crate::api::MAX_BYTES / (1024 * 1024),
+            });
+        }
+        let bytes = std::fs::read(&path_owned).map_err(|e| AppError::Io {
+            message: e.to_string(),
+        })?;
+        Ok(crate::api::sha256_hex(&bytes))
+    })
+    .await
+    .map_err(|e| AppError::Io {
+        message: format!("sha256 task: {e}"),
+    })?
+}
+
+/// Most recent history entry whose SHA-256 matches `sha`, if any.
+async fn lookup_history_by_sha(app: &AppHandle, sha: &str) -> Option<crate::history::HistoryEntry> {
+    let store: HistoryStore = (*app.state::<HistoryStore>()).clone();
+    let entries = history::list(store).await.ok()?;
+    entries
+        .into_iter()
+        .filter(|e| e.sha256 == sha)
+        .max_by(|a, b| a.scanned_at.cmp(&b.scanned_at))
+}
+
+/// True if the prior entry's stored severity counts trip the user's CURRENT
+/// auto-action threshold. We re-evaluate against current settings (rather
+/// than blindly replaying `action_taken`) so the user's chosen threshold
+/// stays authoritative even after they tighten or loosen it.
+///
+/// Legacy note: history entries written before 0.5.3 do not carry the
+/// `confirmedFamilies` field and decode with `confirmed_families = 0`. For
+/// `ConfirmedFamiliesOnly` this means the replay never fires on those
+/// entries; the file gets uploaded once on 0.5.3+ to refresh the count.
+fn action_threshold_matches(
+    settings: &WatcherSettings,
+    prior: &crate::history::HistoryEntry,
+) -> bool {
+    matches_action(
+        &settings.auto_action,
+        prior.severity_counts.critical,
+        prior.confirmed_families,
+        settings.multiple_criticals_threshold,
+    )
+}
+
+/// Result of the known-bad short-circuit. `Handled` means the action ran
+/// (or its failure was reported) and the caller should not fall back to
+/// the upload path. `Miss` means the file was not a cache hit; if the SHA
+/// was already computed for the lookup, it is handed back so the upload
+/// path can reuse it instead of hashing the file a second time.
+enum ReplayOutcome {
+    Handled,
+    Miss { precomputed_sha: Option<String> },
+}
+
+/// If `scan_path` has the SHA-256 of a previously-flagged file that would
+/// trip the current auto-action threshold, apply the action immediately
+/// without uploading. Returns `Handled` when the path was actioned (or its
+/// action failed), otherwise `Miss` with the SHA already computed when we
+/// got far enough to hash the file.
+///
+/// Containers (.zip / .mcpack / .mrpack) need their inner jar extracted
+/// to match the SHA stored in history, which is the upload path's job;
+/// they always return `Miss` here, with no precomputed SHA.
+async fn try_replay_known_bad(
+    store: &WatcherStore,
+    app: &AppHandle,
+    settings: &WatcherSettings,
+    scan_path: &Path,
+    display_name: &str,
+    is_held: bool,
+) -> ReplayOutcome {
+    let logical = scan_path
+        .to_string_lossy()
+        .strip_suffix(HOLD_SUFFIX)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| scan_path.to_string_lossy().into_owned());
+    if !logical.to_ascii_lowercase().ends_with(".jar") {
+        return ReplayOutcome::Miss {
+            precomputed_sha: None,
+        };
+    }
+
+    let sha = match compute_file_sha256(scan_path).await {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!(
+                "known-bad sha256 failed for {}: {e}; falling back to upload",
+                crate::api::redact_path(&scan_path.to_string_lossy())
+            );
+            return ReplayOutcome::Miss {
+                precomputed_sha: None,
+            };
+        }
+    };
+
+    let prior = match lookup_history_by_sha(app, &sha).await {
+        Some(p) => p,
+        None => {
+            return ReplayOutcome::Miss {
+                precomputed_sha: Some(sha),
+            };
+        }
+    };
+
+    // If the watcher already quarantined or trashed this exact file before,
+    // do not action it again. The user may have manually moved a cleaned
+    // copy back, and a silent re-quarantine would feel like data loss. The
+    // reappearance branch just notifies; the threshold check is skipped.
+    let prior_action = match prior.action_taken.as_deref() {
+        Some(a @ ("quarantined" | "trashed")) => Some(a.to_string()),
+        _ => None,
+    };
+    let is_reappearance = prior_action.is_some();
+
+    if !is_reappearance && !action_threshold_matches(settings, &prior) {
+        return ReplayOutcome::Miss {
+            precomputed_sha: Some(sha),
+        };
+    }
+
+    if is_reappearance {
+        log::info!(
+            "known-bad SHA-256 hit for {} (prior {} action={}): reappearance, notifying without action",
+            crate::api::redact_path(&scan_path.to_string_lossy()),
+            prior.scanned_at,
+            prior_action.as_deref().unwrap_or("none"),
+        );
+    } else {
+        log::info!(
+            "known-bad SHA-256 hit for {} (prior {}): applying current auto-action without upload",
+            crate::api::redact_path(&scan_path.to_string_lossy()),
+            prior.scanned_at
+        );
+    }
+
+    let mut final_path = scan_path.to_path_buf();
+    if is_held {
+        match hold::rename_from_pending(&final_path) {
+            Ok(restored) => final_path = restored,
+            Err(e) => {
+                log::warn!("replay: restore before action failed: {e}; proceeding with held name")
+            }
+        }
+    }
+
+    let action_taken = if is_reappearance {
+        None
+    } else {
+        let data_dir = store.data_dir();
+        let (result, label) = match settings.auto_action_mode {
+            ActionMode::Quarantine => (
+                quarantine::send_to_quarantine(&final_path, &data_dir)
+                    .await
+                    .map(Some),
+                "quarantined",
+            ),
+            ActionMode::Trash => (
+                wtrash::send_to_trash(&final_path).await.map(|_| None),
+                "trashed",
+            ),
+        };
+
+        // On action failure we still emit ScanCompleted with action: None so the
+        // frontend resets `currentFile` like the main path does, and the audit
+        // row in history records that the watcher tried but no action was
+        // applied. Returning early here would leave the UI stuck in "Scanning"
+        // until a later event arrived.
+        match result {
+            Ok(new_path) => {
+                if let Some(p) = new_path {
+                    final_path = p;
+                }
+                Some(label.to_string())
+            }
+            Err(e) => {
+                emit_event(
+                    app,
+                    &WatcherEvent::Error {
+                        path: final_path.to_string_lossy().into_owned(),
+                        code: format!("{label}_failed"),
+                        message: e.to_string(),
+                    },
+                );
+                None
+            }
+        }
+    };
+
+    // Re-evaluate the alert threshold against the prior counts so the
+    // replay path respects `alert_threshold` exactly like the main path
+    // (see process_one near line 731). Hardcoding `flagged: true` would
+    // surface UI hits the user explicitly muted. Reappearance always
+    // surfaces in the recent-hits row regardless of alert threshold so
+    // the user notices the file is back.
+    let above_alert = is_reappearance
+        || matches_alert(
+            &settings.alert_threshold,
+            prior.severity_counts.critical,
+            prior.confirmed_families,
+            settings.multiple_criticals_threshold,
+        );
+
+    emit_event(
+        app,
+        &WatcherEvent::ScanCompleted {
+            file_name: display_name.to_string(),
+            path: final_path.to_string_lossy().into_owned(),
+            top_severity: prior.top_severity.clone(),
+            signature_count: prior.signature_count,
+            critical_count: prior.severity_counts.critical,
+            high_count: prior.severity_counts.high,
+            confirmed_families: prior.confirmed_families,
+            sha256: sha.clone(),
+            flagged: above_alert,
+            action: action_taken.clone(),
+            reappeared: is_reappearance,
+            prior_action: prior_action.clone(),
+        },
+    );
+
+    if settings.notifications_enabled && (above_alert || action_taken.is_some()) {
+        wnotify::record_hit(
+            app,
+            settings,
+            wnotify::Hit {
+                file_name: display_name.to_string(),
+                path: final_path.to_string_lossy().into_owned(),
+                top_severity: prior.top_severity.clone(),
+                signature_count: prior.signature_count,
+                critical_count: prior.severity_counts.critical,
+                // Family names are not stored in history; the per-hit
+                // notification falls back to a generic line.
+                family_names: Vec::new(),
+                action: action_taken.clone(),
+                reappeared: is_reappearance,
+                prior_action: prior_action.clone(),
+            },
+        );
+    }
+
+    // Skip the history append on reappearance. The SHA stays the same, so
+    // the next lookup keeps hitting the original entry, and not appending
+    // avoids cluttering the audit log with rows that record no new state.
+    if !is_reappearance {
+        let logical_name = std::path::Path::new(&logical)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(display_name)
+            .to_string();
+        let history_store: HistoryStore = (*app.state::<HistoryStore>()).clone();
+        let entry = history::replay_entry(
+            &prior,
+            &logical_name,
+            ScanSource::Watcher.as_history_tag(),
+            action_taken,
+        );
+        if let Err(e) = history::append(history_store, entry).await {
+            log::warn!("replay history append failed: {e}");
+        }
+    }
+
+    ReplayOutcome::Handled
 }

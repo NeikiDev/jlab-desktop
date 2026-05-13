@@ -27,10 +27,13 @@ Native desktop client for the public [JLab static JAR scanner](https://jlab.thre
 Pre-built installers are published on the GitHub Releases page on every push to `main`.
 
 - macOS (universal, Apple Silicon and Intel): `JLab.Desktop_x.y.z_universal.dmg`
-- Windows (MSI): `JLab.Desktop_x.y.z_x64_en-US.msi`
+- Windows (setup, recommended for personal use): `JLab.Desktop_x.y.z_x64-setup.exe`
+- Windows (MSI, for IT-managed deployments): `JLab.Desktop_x.y.z_x64_en-US.msi`
 - Linux (Debian / Ubuntu): `JLab.Desktop_x.y.z_amd64.deb`
 - Linux (Fedora / RHEL / openSUSE): `JLab.Desktop-x.y.z-1.x86_64.rpm`
 - Linux (universal): `JLab.Desktop_x.y.z_amd64.AppImage`
+
+On Windows the `.exe` setup is the easy path: per-user install, no admin prompt, normal wizard. Pick the `.msi` only if your IT department deploys it via Group Policy, Intune, or SCCM.
 
 [Download the latest release](https://github.com/NeikiDev/jlab-desktop/releases/latest).
 

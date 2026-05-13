@@ -136,6 +136,13 @@ export interface HistoryEntry {
   /// "manual" for drag-drop scans, "watcher" for auto-scans. Older entries
   /// without this field decode as "manual" on the Rust side.
   source?: string;
+  /// Confirmed family count at scan time. Used by the watcher's known-bad
+  /// SHA-256 short-circuit to re-evaluate the auto-action threshold without
+  /// re-uploading. Older entries decode as 0.
+  confirmedFamilies?: number;
+  /// Action the watcher applied at scan time: "quarantined", "trashed", or
+  /// undefined (no action / manual scan).
+  actionTaken?: string | null;
 }
 
 // === Watcher ===
@@ -203,6 +210,8 @@ export type WatcherEvent =
       sha256: string;
       flagged: boolean;
       action: "quarantined" | "trashed" | null;
+      reappeared?: boolean;
+      priorAction?: "quarantined" | "trashed" | null;
     }
   | { type: "error"; path: string; code: string; message: string }
   | { type: "focus-review" };

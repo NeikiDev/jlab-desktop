@@ -1,18 +1,102 @@
-import { useCallback, useEffect, useReducer, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import DropZone from "./lib/components/DropZone";
 import ScanProgress from "./lib/components/ScanProgress";
 import SignatureList from "./lib/components/SignatureList";
 import ErrorBanner from "./lib/components/ErrorBanner";
-import RemoteStatus from "./lib/components/RemoteStatus";
+import RemoteStatus, {
+  type RemoteStatusPhase,
+} from "./lib/components/RemoteStatus";
 import UpdaterButton from "./lib/components/UpdaterButton";
 import BrandMark from "./lib/components/BrandMark";
 import AppFooter from "./lib/components/AppFooter";
 import HistoryPanel from "./lib/components/HistoryPanel";
 import IdleDashboard from "./lib/components/IdleDashboard";
 import WatcherPanel from "./lib/components/WatcherPanel";
-import { cancelScan, isAppError, scanJar, subscribeWatcher } from "./lib/api";
+import {
+  cancelScan,
+  checkStatus,
+  isAppError,
+  scanJar,
+  subscribeWatcher,
+  type StatusInfo,
+} from "./lib/api";
 import type { AppError, ScanResult, ScanState } from "./lib/types";
 import { cn } from "./lib/cn";
+
+const REMOTE_STATUS_REFRESH_MS = 60_000;
+
+interface RemoteStatusState {
+  phase: RemoteStatusPhase;
+  info: StatusInfo | null;
+  lastChecked: Date | null;
+  recheck: () => void;
+}
+
+function useRemoteStatus(): RemoteStatusState {
+  const [phase, setPhase] = useState<RemoteStatusPhase>("checking");
+  const [info, setInfo] = useState<StatusInfo | null>(null);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const inFlight = useRef(false);
+  const hasResult = useRef(false);
+
+  const run = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    if (!hasResult.current) setPhase("checking");
+    try {
+      const result = await checkStatus();
+      setInfo(result);
+      setPhase(result.ok ? "online" : "offline");
+      setLastChecked(new Date());
+    } catch {
+      setInfo({ ok: false, status: null, latencyMs: 0, version: null, error: "ipc error" });
+      setPhase("offline");
+      setLastChecked(new Date());
+    } finally {
+      hasResult.current = true;
+      inFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    let intervalId: number | null = null;
+
+    const startInterval = () => {
+      if (intervalId !== null) return;
+      intervalId = window.setInterval(() => {
+        void run();
+      }, REMOTE_STATUS_REFRESH_MS);
+    };
+
+    const stopInterval = () => {
+      if (intervalId === null) return;
+      window.clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    if (document.visibilityState !== "hidden") {
+      void run();
+      startInterval();
+    }
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        stopInterval();
+      } else {
+        void run();
+        startInterval();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      stopInterval();
+    };
+  }, [run]);
+
+  return { phase, info, lastChecked, recheck: () => void run() };
+}
 
 type Action =
   | { type: "start"; path: string }
@@ -44,6 +128,11 @@ export default function App() {
   // Starting a scan from anywhere returns the user to the scan view.
   const [showingHistory, setShowingHistory] = useState(false);
   const [showingWatcher, setShowingWatcher] = useState(false);
+  const remoteStatus = useRemoteStatus();
+  // "checking" is treated as online so the UI doesn't flash a red warning
+  // on first load before the first poll resolves. Only an actual offline
+  // result trips the watcher's down-state.
+  const apiOnline = remoteStatus.phase !== "offline";
 
   const startScan = useCallback(async (path: string) => {
     setShowingHistory(false);
@@ -131,6 +220,7 @@ export default function App() {
         contextLabel={contextLabel}
         contextTone={contextTone}
         scanning={scan.state === "scanning"}
+        remoteStatus={remoteStatus}
       />
 
       <main
@@ -150,13 +240,14 @@ export default function App() {
         )}
 
         {inHistoryView && <HistoryPanel onBack={hideHistory} />}
-        {inWatcherView && <WatcherPanel onBack={hideWatcher} />}
+        {inWatcherView && <WatcherPanel onBack={hideWatcher} apiOnline={apiOnline} />}
 
         {scan.state === "idle" && !showingHistory && !showingWatcher && (
           <IdleDashboard
             onPick={startScan}
             onShowHistory={showHistory}
             onShowWatcher={showWatcher}
+            apiOnline={apiOnline}
           />
         )}
 
@@ -179,9 +270,10 @@ interface TopBarProps {
   contextLabel: string | null;
   contextTone: "accent" | "critical" | "ok" | "muted";
   scanning: boolean;
+  remoteStatus: RemoteStatusState;
 }
 
-function TopBar({ onReset, contextLabel, contextTone, scanning }: TopBarProps) {
+function TopBar({ onReset, contextLabel, contextTone, scanning, remoteStatus }: TopBarProps) {
   const toneClass =
     contextTone === "accent"
       ? "text-accent"
@@ -237,7 +329,12 @@ function TopBar({ onReset, contextLabel, contextTone, scanning }: TopBarProps) {
 
       <div className="flex shrink-0 items-center gap-2">
         <UpdaterButton />
-        <RemoteStatus />
+        <RemoteStatus
+          phase={remoteStatus.phase}
+          info={remoteStatus.info}
+          lastChecked={remoteStatus.lastChecked}
+          onRecheck={remoteStatus.recheck}
+        />
       </div>
     </header>
   );

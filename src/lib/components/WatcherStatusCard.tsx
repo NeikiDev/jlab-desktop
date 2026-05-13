@@ -14,6 +14,8 @@ export interface ReviewItem {
   signatureCount: number;
   flagged: boolean;
   action: "quarantined" | "trashed" | null;
+  reappeared?: boolean;
+  priorAction?: "quarantined" | "trashed" | null;
   at: number;
 }
 
@@ -157,38 +159,56 @@ export default function WatcherStatusCard({ runtime, recent }: Props) {
             </span>
           </div>
           <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
-            {recent.slice(0, 8).map((r) => (
-              <li
-                key={`${r.path}-${r.at}`}
-                title={`${r.fileName} - ${r.topSeverity} - ${r.signatureCount} signature${r.signatureCount === 1 ? "" : "s"}${r.action ? ` (${r.action})` : ""}`}
-                className={cn(
-                  "inline-flex max-w-[280px] items-center gap-2 rounded-full border border-border-faint bg-bg-elev/40 px-2.5 py-0.5 text-[12.5px] text-text",
-                  r.action === "trashed" &&
-                    "border-sev-critical-edge bg-sev-critical-soft text-sev-critical",
-                  r.action === "quarantined" &&
-                    "border-sev-high-edge bg-sev-high-soft text-sev-high",
-                )}
-              >
-                <span
-                  aria-hidden="true"
+            {recent.slice(0, 8).map((r) => {
+              const reappearedLabel = r.reappeared
+                ? r.priorAction === "trashed"
+                  ? "previously deleted"
+                  : "previously quarantined"
+                : null;
+              const titleSuffix = reappearedLabel
+                ? ` (${reappearedLabel}, moved back)`
+                : r.action
+                  ? ` (${r.action})`
+                  : "";
+              return (
+                <li
+                  key={`${r.path}-${r.at}`}
+                  title={`${r.fileName} - ${r.topSeverity} - ${r.signatureCount} signature${r.signatureCount === 1 ? "" : "s"}${titleSuffix}`}
                   className={cn(
-                    "h-1.5 w-1.5 shrink-0 rounded-full",
-                    SEV_DOT[r.topSeverity] ?? "bg-text-faint",
-                  )}
-                />
-                <span className="min-w-0 max-w-[180px] truncate font-mono text-[12px]">
-                  {r.fileName}
-                </span>
-                <span
-                  className={cn(
-                    "shrink-0 text-[11px] font-medium capitalize",
-                    SEV_TEXT[r.topSeverity] ?? "text-text-faint",
+                    "inline-flex max-w-[280px] items-center gap-2 rounded-full border border-border-faint bg-bg-elev/40 px-2.5 py-0.5 text-[12.5px] text-text",
+                    r.reappeared &&
+                      "border-sev-medium-edge bg-sev-medium-soft text-sev-medium",
+                    !r.reappeared &&
+                      r.action === "trashed" &&
+                      "border-sev-critical-edge bg-sev-critical-soft text-sev-critical",
+                    !r.reappeared &&
+                      r.action === "quarantined" &&
+                      "border-sev-high-edge bg-sev-high-soft text-sev-high",
                   )}
                 >
-                  {r.topSeverity}
-                </span>
-              </li>
-            ))}
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      SEV_DOT[r.topSeverity] ?? "bg-text-faint",
+                    )}
+                  />
+                  <span className="min-w-0 max-w-[180px] truncate font-mono text-[12px]">
+                    {r.fileName}
+                  </span>
+                  <span
+                    className={cn(
+                      "shrink-0 text-[11px] font-medium capitalize",
+                      r.reappeared
+                        ? "text-sev-medium"
+                        : SEV_TEXT[r.topSeverity] ?? "text-text-faint",
+                    )}
+                  >
+                    {r.reappeared ? "Moved back" : r.topSeverity}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

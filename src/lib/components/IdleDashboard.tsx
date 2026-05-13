@@ -26,6 +26,7 @@ interface Props {
   onPick: (path: string) => void;
   onShowHistory: () => void;
   onShowWatcher: () => void;
+  apiOnline: boolean;
 }
 
 const SEV_DOT: Record<Severity, string> = {
@@ -59,6 +60,7 @@ export default function IdleDashboard({
   onPick,
   onShowHistory,
   onShowWatcher,
+  apiOnline,
 }: Props) {
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
   const [cap, setCap] = useState<number>(100);
@@ -157,6 +159,7 @@ export default function IdleDashboard({
           folders={watcherFolders}
           currentFile={watcherCurrent}
           queueDepth={watcherQueue}
+          apiOnline={apiOnline}
           stacked
           onClick={onShowWatcher}
         />
@@ -279,6 +282,7 @@ function WatcherCard({
   folders,
   currentFile,
   queueDepth,
+  apiOnline,
   stacked,
   onClick,
 }: {
@@ -288,11 +292,15 @@ function WatcherCard({
   folders: number;
   currentFile: string | null;
   queueDepth: number;
+  apiOnline: boolean;
   stacked?: boolean;
   onClick: () => void;
 }) {
-  const statusText =
-    runState === "scanning"
+  const apiDown = enabled && !apiOnline;
+
+  const statusText = apiDown
+    ? "API offline"
+    : runState === "scanning"
       ? "Scanning"
       : runState === "paused"
         ? "Paused"
@@ -302,8 +310,9 @@ function WatcherCard({
             : "Watching"
           : "Off";
 
-  const dotClass =
-    runState === "scanning"
+  const dotClass = apiDown
+    ? "bg-sev-critical animate-status-pulse"
+    : runState === "scanning"
       ? "bg-status-ok animate-status-pulse"
       : enabled
         ? "bg-status-ok animate-status-pulse"
@@ -313,8 +322,13 @@ function WatcherCard({
     <button
       type="button"
       onClick={onClick}
-      aria-label="Open folder watcher"
-      className="frame group flex h-full flex-col gap-4 p-5 text-left transition-colors duration-fast ease-out hover:bg-bg-elev/40 focus-visible:bg-bg-elev/40"
+      aria-label={
+        apiDown ? "Open folder watcher (API offline)" : "Open folder watcher"
+      }
+      className={cn(
+        "frame group flex h-full flex-col gap-4 p-5 text-left transition-colors duration-fast ease-out hover:bg-bg-elev/40 focus-visible:bg-bg-elev/40",
+        apiDown && "border-[color:var(--color-sev-critical-edge)] bg-sev-critical-soft/30",
+      )}
     >
       <div className="flex items-center justify-between">
         <span className="inline-flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-[0.08em] text-text-dim">
@@ -329,9 +343,11 @@ function WatcherCard({
           <span
             className={cn(
               "text-[12.5px] font-medium",
-              enabled || runState === "scanning"
-                ? "text-text"
-                : "text-text-dim",
+              apiDown
+                ? "text-sev-critical"
+                : enabled || runState === "scanning"
+                  ? "text-text"
+                  : "text-text-dim",
             )}
           >
             {statusText}

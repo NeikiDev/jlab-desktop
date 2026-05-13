@@ -57,8 +57,9 @@ fn fingerprint(bytes: &[u8]) -> String {
 }
 
 /// Lowercase SHA-256 hex of `bytes`. Used to look up third-party threat intel
-/// against the public threat-rip endpoint.
-fn sha256_hex(bytes: &[u8]) -> String {
+/// against the public threat-rip endpoint and by the watcher's known-bad
+/// short-circuit (`watcher::core`) to look up history before uploading.
+pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(digest.len() * 2);
@@ -161,7 +162,7 @@ const STATUS_ENDPOINT: &str = "https://jlab.threat.rip/api/stats";
 const THREAT_INTEL_ENDPOINT: &str = "https://jlab.threat.rip/api/public/threat-intel";
 const CLIENT_HEADER: &str = "x-jlab-client";
 const CLIENT_VALUE: &str = "desktop";
-const MAX_BYTES: u64 = 50 * 1024 * 1024;
+pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
 const PHASE_EVENT: &str = "scan://phase";
 
 // Upper bounds on response body sizes (#67). The shared reqwest client has no
@@ -367,17 +368,25 @@ impl ScanSource {
     }
 }
 
-/// Result of a successful scan. Manual scans wrap this into a JSON envelope
-/// string for the IPC return value; the watcher consumes it directly so it
-/// can decide on coalescing and auto-delete without re-parsing.
+/// Result of a successful scan. Manual scans project this into `ScanEnvelope`
+/// for the IPC return value; the watcher consumes it directly so it can decide
+/// on coalescing and auto-delete without re-parsing.
 pub struct ScanOutcome {
     pub scan: serde_json::Value,
     pub threat_intel: serde_json::Value,
     pub sha256: String,
-    #[allow(dead_code)]
     pub upload_name: String,
-    #[allow(dead_code)]
     pub upload_size: u64,
+}
+
+/// IPC return value for `scan_jar`. Tauri serializes this once for the
+/// frontend; do not pre-serialize to a JSON string here.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanEnvelope {
+    pub scan: serde_json::Value,
+    pub threat_intel: serde_json::Value,
+    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -417,12 +426,21 @@ pub async fn scan_jar(
     jobs: State<'_, ScanJobs>,
     http: State<'_, HttpClient>,
     path: String,
-) -> Result<String, AppError> {
+) -> Result<ScanEnvelope, AppError> {
     let started = Instant::now();
     let cancel = Arc::new(Notify::new());
     jobs.install(&cancel);
 
-    let result = run_scan(&app, &http.0, &cancel, started, path, ScanSource::Manual).await;
+    let result = run_scan(
+        &app,
+        &http.0,
+        &cancel,
+        started,
+        path,
+        ScanSource::Manual,
+        None,
+    )
+    .await;
 
     jobs.clear_if_current(&cancel);
 
@@ -441,19 +459,39 @@ pub async fn scan_jar(
         ),
     }
 
-    result.map(|o| {
-        let envelope = serde_json::json!({
-            "scan": o.scan,
-            "threatIntel": o.threat_intel,
-            "sha256": o.sha256,
-        });
-        envelope.to_string()
+    if let Ok(o) = &result {
+        // Manual scans never auto-action, so `action_taken` is always None.
+        // History IO is best-effort: log and move on if disk is misbehaving
+        // so the user still sees their scan result.
+        let store: HistoryStore = (*app.state::<HistoryStore>()).clone();
+        let entry = history::build_entry(
+            &o.scan,
+            &o.upload_name,
+            o.upload_size,
+            &o.sha256,
+            ScanSource::Manual.as_history_tag(),
+            None,
+        );
+        if let Err(e) = history::append(store, entry).await {
+            log::warn!("history append failed: {e}");
+        }
+    }
+
+    result.map(|o| ScanEnvelope {
+        scan: o.scan,
+        threat_intel: o.threat_intel,
+        sha256: o.sha256,
     })
 }
 
 /// Run a scan and return the parsed outcome. Shared by the manual `scan_jar`
 /// command and the folder watcher. The watcher passes `ScanSource::Watcher`
 /// to suppress phase events and to tag the history entry.
+///
+/// `precomputed_sha` lets the watcher pass a SHA-256 it already computed for
+/// the known-bad lookup so we do not hash the file twice on a cache miss.
+/// Only used for plain `.jar` paths; containers ignore it because the upload
+/// SHA is taken from the extracted inner jar, not the outer archive.
 pub async fn run_scan(
     app: &AppHandle,
     client: &Client,
@@ -461,6 +499,7 @@ pub async fn run_scan(
     started: Instant,
     path: String,
     source: ScanSource,
+    precomputed_sha: Option<String>,
 ) -> Result<ScanOutcome, AppError> {
     emit_phase(app, source, started, "validate", "running", None);
     let p = Path::new(&path);
@@ -642,7 +681,13 @@ pub async fn run_scan(
     };
 
     let upload_size = bytes.len();
-    let sha256 = sha256_hex(&bytes);
+    // Containers extract a different inner jar than the outer file the
+    // watcher hashed, so any precomputed SHA from the caller only applies
+    // to plain `.jar` uploads. For containers we always re-hash.
+    let sha256 = match (is_container, precomputed_sha) {
+        (false, Some(s)) => s,
+        _ => sha256_hex(&bytes),
+    };
     log::info!("inner jar sha256={sha256}");
 
     let part = Part::bytes(bytes)
@@ -778,20 +823,10 @@ pub async fn run_scan(
                 }
             })?;
 
-            // Persist a small history entry on the side. We never fail the
-            // scan if disk IO is misbehaving: log and move on so the user
-            // still sees their result.
-            let store: HistoryStore = (*app.state::<HistoryStore>()).clone();
-            let entry = history::build_entry(
-                &scan_value,
-                &upload_name,
-                upload_size as u64,
-                &sha256,
-                source.as_history_tag(),
-            );
-            if let Err(e) = history::append(store, entry).await {
-                log::warn!("history append failed: {e}");
-            }
+            // History is persisted by the caller. The watcher waits until
+            // after its auto-action decision so the entry records what
+            // happened to the file ("quarantined", "trashed", or none).
+            // Manual scans append immediately in `scan_jar`.
 
             Ok(ScanOutcome {
                 scan: scan_value,
@@ -836,10 +871,10 @@ pub async fn run_scan(
             })
         }
         s => {
-            let message = response
-                .json::<serde_json::Value>()
-                .await
-                .ok()
+            let bytes = read_capped(response, MAX_INTEL_BODY_BYTES).await.ok();
+            let message = bytes
+                .as_deref()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
                 .unwrap_or_else(|| s.canonical_reason().unwrap_or("unknown error").to_string());
             log::error!("non-OK status {} message={message}", s.as_u16());

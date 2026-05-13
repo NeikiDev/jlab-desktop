@@ -95,7 +95,7 @@ fn show_main_window(app: &AppHandle) {
 
 fn toggle_pause(app: &AppHandle) {
     let store = match app.try_state::<crate::watcher::WatcherStore>() {
-        Some(s) => s.inner_clone(),
+        Some(s) => (*s).clone(),
         None => return,
     };
     let now_enabled = store.snapshot_settings().enabled;
@@ -119,10 +119,4 @@ fn toggle_pause(app: &AppHandle) {
         "watcher://event",
         serde_json::json!({ "type": "state-changed" }),
     );
-}
-
-impl crate::watcher::WatcherStore {
-    fn inner_clone(&self) -> Self {
-        self.clone()
-    }
 }
