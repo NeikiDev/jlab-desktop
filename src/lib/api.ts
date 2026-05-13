@@ -100,17 +100,9 @@ export async function scanJar(path: string): Promise<ScanResult> {
   console.log("[scanJar] invoke start", path);
   await ensurePhaseListener();
   resetPhaseBuffer();
-  const json = await invoke<string>("scan_jar", { path });
+  const envelope = await invoke<ScanEnvelope>("scan_jar", { path });
   const t1 = performance.now();
-  console.log(`[scanJar] invoke resolved in ${(t1 - t0).toFixed(0)}ms, ${json.length} chars`);
-
-  let envelope: ScanEnvelope;
-  try {
-    envelope = JSON.parse(json);
-  } catch (e) {
-    throw clientError("parse", e, "Could not parse scan result");
-  }
-  const t2 = performance.now();
+  console.log(`[scanJar] invoke resolved in ${(t1 - t0).toFixed(0)}ms`);
 
   const rawObj = asObj(envelope?.scan);
   const rawSignatures = rawObj && Array.isArray(rawObj.signatures) ? rawObj.signatures : null;
@@ -121,7 +113,7 @@ export async function scanJar(path: string): Promise<ScanResult> {
       "Scan result was not in the expected shape",
     );
   }
-  console.log(`[scanJar] JSON.parse in ${(t2 - t1).toFixed(0)}ms, ${rawSignatures.length} sigs`);
+  console.log(`[scanJar] ${rawSignatures.length} sigs`);
 
   let signatures: Signature[];
   try {
@@ -152,7 +144,7 @@ export async function scanJar(path: string): Promise<ScanResult> {
     throw clientError("map", e, "Could not process scan result");
   }
   const t3 = performance.now();
-  console.log(`[scanJar] mapped payload in ${(t3 - t2).toFixed(0)}ms`);
+  console.log(`[scanJar] mapped payload in ${(t3 - t1).toFixed(0)}ms`);
 
   const confirmedFamilies = normalizeConfirmedFamilies(rawObj.confirmedFamilies, signatures);
   const sha256 =

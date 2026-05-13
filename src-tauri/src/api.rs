@@ -368,15 +368,25 @@ impl ScanSource {
     }
 }
 
-/// Result of a successful scan. Manual scans wrap this into a JSON envelope
-/// string for the IPC return value; the watcher consumes it directly so it
-/// can decide on coalescing and auto-delete without re-parsing.
+/// Result of a successful scan. Manual scans project this into `ScanEnvelope`
+/// for the IPC return value; the watcher consumes it directly so it can decide
+/// on coalescing and auto-delete without re-parsing.
 pub struct ScanOutcome {
     pub scan: serde_json::Value,
     pub threat_intel: serde_json::Value,
     pub sha256: String,
     pub upload_name: String,
     pub upload_size: u64,
+}
+
+/// IPC return value for `scan_jar`. Tauri serializes this once for the
+/// frontend; do not pre-serialize to a JSON string here.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanEnvelope {
+    pub scan: serde_json::Value,
+    pub threat_intel: serde_json::Value,
+    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -416,7 +426,7 @@ pub async fn scan_jar(
     jobs: State<'_, ScanJobs>,
     http: State<'_, HttpClient>,
     path: String,
-) -> Result<String, AppError> {
+) -> Result<ScanEnvelope, AppError> {
     let started = Instant::now();
     let cancel = Arc::new(Notify::new());
     jobs.install(&cancel);
@@ -467,13 +477,10 @@ pub async fn scan_jar(
         }
     }
 
-    result.map(|o| {
-        let envelope = serde_json::json!({
-            "scan": o.scan,
-            "threatIntel": o.threat_intel,
-            "sha256": o.sha256,
-        });
-        envelope.to_string()
+    result.map(|o| ScanEnvelope {
+        scan: o.scan,
+        threat_intel: o.threat_intel,
+        sha256: o.sha256,
     })
 }
 
@@ -864,10 +871,10 @@ pub async fn run_scan(
             })
         }
         s => {
-            let message = response
-                .json::<serde_json::Value>()
-                .await
-                .ok()
+            let bytes = read_capped(response, MAX_INTEL_BODY_BYTES).await.ok();
+            let message = bytes
+                .as_deref()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
                 .unwrap_or_else(|| s.canonical_reason().unwrap_or("unknown error").to_string());
             log::error!("non-OK status {} message={message}", s.as_u16());
