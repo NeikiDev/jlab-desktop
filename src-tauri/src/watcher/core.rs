@@ -336,7 +336,9 @@ impl WatcherStore {
         Ok(())
     }
 
-    /// Stop the OS watcher and the consumer. Drains in-flight events.
+    /// Stop the OS watcher and the consumer. In-flight events sitting in
+    /// the queue when stop is called are abandoned; re-enable the watcher
+    /// to resume processing.
     pub fn stop(&self, app: &AppHandle) {
         let (kill_consumer, kill_rescan) = {
             let mut s = self.inner.state.lock().unwrap();
@@ -410,8 +412,8 @@ impl WatcherStore {
         if !SUPPORTED_EXTS.contains(&ext.as_str()) {
             return None;
         }
-        let meta = std::fs::metadata(&raw_path).ok()?;
-        if !meta.is_file() {
+        let meta = std::fs::symlink_metadata(&raw_path).ok()?;
+        if !meta.file_type().is_file() {
             return None;
         }
         let mtime = meta.modified().ok()?;
