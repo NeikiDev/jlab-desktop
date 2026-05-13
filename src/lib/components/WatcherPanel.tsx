@@ -93,6 +93,8 @@ export default function WatcherPanel({ onBack, apiOnline }: Props) {
             signatureCount: ev.signatureCount,
             flagged: ev.flagged,
             action: ev.action,
+            reappeared: ev.reappeared ?? false,
+            priorAction: ev.priorAction ?? null,
             at: Date.now(),
           };
           recentRef.current = [item, ...recentRef.current].slice(0, 20);

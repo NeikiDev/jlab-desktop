@@ -535,6 +535,14 @@ pub enum WatcherEvent {
         flagged: bool,
         /// `"quarantined"`, `"trashed"`, or `None` when no auto-action ran.
         action: Option<String>,
+        /// `true` when the file was previously quarantined or trashed by the
+        /// watcher and has reappeared in a watched folder. No new action ran;
+        /// the user is just notified. `prior_action` carries the earlier
+        /// label so the UI can say "previously quarantined" vs "deleted".
+        #[serde(default)]
+        reappeared: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prior_action: Option<String>,
     },
     #[serde(rename = "error")]
     Error {
@@ -815,6 +823,8 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
                     sha256: o.sha256.clone(),
                     flagged: above_alert,
                     action: action_taken.clone(),
+                    reappeared: false,
+                    prior_action: None,
                 },
             );
 
@@ -846,6 +856,8 @@ async fn process_one(store: &WatcherStore, app: &AppHandle, original_path: PathB
                         critical_count: critical,
                         family_names: confirmed_family_names(&o.scan),
                         action: action_taken.clone(),
+                        reappeared: false,
+                        prior_action: None,
                     },
                 );
             }
@@ -1133,17 +1145,36 @@ async fn try_replay_known_bad(
         }
     };
 
-    if !action_threshold_matches(settings, &prior) {
+    // If the watcher already quarantined or trashed this exact file before,
+    // do not action it again. The user may have manually moved a cleaned
+    // copy back, and a silent re-quarantine would feel like data loss. The
+    // reappearance branch just notifies; the threshold check is skipped.
+    let prior_action = match prior.action_taken.as_deref() {
+        Some(a @ ("quarantined" | "trashed")) => Some(a.to_string()),
+        _ => None,
+    };
+    let is_reappearance = prior_action.is_some();
+
+    if !is_reappearance && !action_threshold_matches(settings, &prior) {
         return ReplayOutcome::Miss {
             precomputed_sha: Some(sha),
         };
     }
 
-    log::info!(
-        "known-bad SHA-256 hit for {} (prior {}): applying current auto-action without upload",
-        crate::api::redact_path(&scan_path.to_string_lossy()),
-        prior.scanned_at
-    );
+    if is_reappearance {
+        log::info!(
+            "known-bad SHA-256 hit for {} (prior {} action={}): reappearance, notifying without action",
+            crate::api::redact_path(&scan_path.to_string_lossy()),
+            prior.scanned_at,
+            prior_action.as_deref().unwrap_or("none"),
+        );
+    } else {
+        log::info!(
+            "known-bad SHA-256 hit for {} (prior {}): applying current auto-action without upload",
+            crate::api::redact_path(&scan_path.to_string_lossy()),
+            prior.scanned_at
+        );
+    }
 
     let mut final_path = scan_path.to_path_buf();
     if is_held {
@@ -1155,55 +1186,62 @@ async fn try_replay_known_bad(
         }
     }
 
-    let data_dir = store.data_dir();
-    let (result, label) = match settings.auto_action_mode {
-        ActionMode::Quarantine => (
-            quarantine::send_to_quarantine(&final_path, &data_dir)
-                .await
-                .map(Some),
-            "quarantined",
-        ),
-        ActionMode::Trash => (
-            wtrash::send_to_trash(&final_path).await.map(|_| None),
-            "trashed",
-        ),
-    };
+    let action_taken = if is_reappearance {
+        None
+    } else {
+        let data_dir = store.data_dir();
+        let (result, label) = match settings.auto_action_mode {
+            ActionMode::Quarantine => (
+                quarantine::send_to_quarantine(&final_path, &data_dir)
+                    .await
+                    .map(Some),
+                "quarantined",
+            ),
+            ActionMode::Trash => (
+                wtrash::send_to_trash(&final_path).await.map(|_| None),
+                "trashed",
+            ),
+        };
 
-    // On action failure we still emit ScanCompleted with action: None so the
-    // frontend resets `currentFile` like the main path does, and the audit
-    // row in history records that the watcher tried but no action was
-    // applied. Returning early here would leave the UI stuck in "Scanning"
-    // until a later event arrived.
-    let action_taken = match result {
-        Ok(new_path) => {
-            if let Some(p) = new_path {
-                final_path = p;
+        // On action failure we still emit ScanCompleted with action: None so the
+        // frontend resets `currentFile` like the main path does, and the audit
+        // row in history records that the watcher tried but no action was
+        // applied. Returning early here would leave the UI stuck in "Scanning"
+        // until a later event arrived.
+        match result {
+            Ok(new_path) => {
+                if let Some(p) = new_path {
+                    final_path = p;
+                }
+                Some(label.to_string())
             }
-            Some(label.to_string())
-        }
-        Err(e) => {
-            emit_event(
-                app,
-                &WatcherEvent::Error {
-                    path: final_path.to_string_lossy().into_owned(),
-                    code: format!("{label}_failed"),
-                    message: e.to_string(),
-                },
-            );
-            None
+            Err(e) => {
+                emit_event(
+                    app,
+                    &WatcherEvent::Error {
+                        path: final_path.to_string_lossy().into_owned(),
+                        code: format!("{label}_failed"),
+                        message: e.to_string(),
+                    },
+                );
+                None
+            }
         }
     };
 
     // Re-evaluate the alert threshold against the prior counts so the
     // replay path respects `alert_threshold` exactly like the main path
     // (see process_one near line 731). Hardcoding `flagged: true` would
-    // surface UI hits the user explicitly muted.
-    let above_alert = matches_alert(
-        &settings.alert_threshold,
-        prior.severity_counts.critical,
-        prior.confirmed_families,
-        settings.multiple_criticals_threshold,
-    );
+    // surface UI hits the user explicitly muted. Reappearance always
+    // surfaces in the recent-hits row regardless of alert threshold so
+    // the user notices the file is back.
+    let above_alert = is_reappearance
+        || matches_alert(
+            &settings.alert_threshold,
+            prior.severity_counts.critical,
+            prior.confirmed_families,
+            settings.multiple_criticals_threshold,
+        );
 
     emit_event(
         app,
@@ -1218,6 +1256,8 @@ async fn try_replay_known_bad(
             sha256: sha.clone(),
             flagged: above_alert,
             action: action_taken.clone(),
+            reappeared: is_reappearance,
+            prior_action: prior_action.clone(),
         },
     );
 
@@ -1235,24 +1275,31 @@ async fn try_replay_known_bad(
                 // notification falls back to a generic line.
                 family_names: Vec::new(),
                 action: action_taken.clone(),
+                reappeared: is_reappearance,
+                prior_action: prior_action.clone(),
             },
         );
     }
 
-    let logical_name = std::path::Path::new(&logical)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(display_name)
-        .to_string();
-    let history_store: HistoryStore = (*app.state::<HistoryStore>()).clone();
-    let entry = history::replay_entry(
-        &prior,
-        &logical_name,
-        ScanSource::Watcher.as_history_tag(),
-        action_taken,
-    );
-    if let Err(e) = history::append(history_store, entry).await {
-        log::warn!("replay history append failed: {e}");
+    // Skip the history append on reappearance. The SHA stays the same, so
+    // the next lookup keeps hitting the original entry, and not appending
+    // avoids cluttering the audit log with rows that record no new state.
+    if !is_reappearance {
+        let logical_name = std::path::Path::new(&logical)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(display_name)
+            .to_string();
+        let history_store: HistoryStore = (*app.state::<HistoryStore>()).clone();
+        let entry = history::replay_entry(
+            &prior,
+            &logical_name,
+            ScanSource::Watcher.as_history_tag(),
+            action_taken,
+        );
+        if let Err(e) = history::append(history_store, entry).await {
+            log::warn!("replay history append failed: {e}");
+        }
     }
 
     ReplayOutcome::Handled

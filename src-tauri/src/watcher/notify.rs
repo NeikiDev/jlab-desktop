@@ -26,6 +26,15 @@ pub struct Hit {
     /// `Some("quarantined")`, `Some("trashed")`, or `None` if no
     /// auto-action ran for this hit.
     pub action: Option<String>,
+    /// `true` when the file was previously quarantined or trashed and has
+    /// reappeared in a watched folder. The notification text switches to a
+    /// "moved back" line and `action` stays `None` because we do not
+    /// auto-action reappearances.
+    pub reappeared: bool,
+    /// The earlier action label when `reappeared` is true: `"quarantined"`
+    /// or `"trashed"`. Lets the notification say "previously quarantined"
+    /// vs "previously deleted".
+    pub prior_action: Option<String>,
 }
 
 #[derive(Default)]
@@ -76,17 +85,32 @@ pub fn record_hit(app: &AppHandle, settings: &WatcherSettings, hit: Hit) {
 
 fn post_notification(app: &AppHandle, hits: &[Hit]) {
     let n = hits.len();
+    let all_reappeared = !hits.is_empty() && hits.iter().all(|h| h.reappeared);
     let action_summary: Option<&str> = summarize_action(hits);
 
     let (title, body) = if n == 1 {
         let h = &hits[0];
-        let action = match h.action.as_deref() {
-            Some("quarantined") => " (quarantined)",
-            Some("trashed") => " (sent to trash)",
-            _ => "",
-        };
-        let body = format!("{}{}", describe_hit(h), action);
-        (h.file_name.clone(), body)
+        if h.reappeared {
+            let prior = match h.prior_action.as_deref() {
+                Some("trashed") => "deleted",
+                _ => "quarantined",
+            };
+            (
+                "Attention: known-bad file is back".to_string(),
+                format!(
+                    "{} was previously {prior} and was moved into a watched folder again.",
+                    h.file_name
+                ),
+            )
+        } else {
+            let action = match h.action.as_deref() {
+                Some("quarantined") => " (quarantined)",
+                Some("trashed") => " (sent to trash)",
+                _ => "",
+            };
+            let body = format!("{}{}", describe_hit(h), action);
+            (h.file_name.clone(), body)
+        }
     } else {
         let names: Vec<&str> = hits.iter().take(3).map(|h| h.file_name.as_str()).collect();
         let extra = n.saturating_sub(names.len());
@@ -94,11 +118,15 @@ fn post_notification(app: &AppHandle, hits: &[Hit]) {
         if extra > 0 {
             body.push_str(&format!(", +{extra} more"));
         }
-        let title = match action_summary {
-            Some("quarantined") => format!("JLab auto-quarantined {n} risky files"),
-            Some("trashed") => format!("JLab auto-deleted {n} risky files"),
-            Some(_) => format!("JLab took action on {n} risky files"),
-            None => format!("JLab found {n} risky files"),
+        let title = if all_reappeared {
+            format!("Attention: {n} known-bad files are back")
+        } else {
+            match action_summary {
+                Some("quarantined") => format!("JLab auto-quarantined {n} risky files"),
+                Some("trashed") => format!("JLab auto-deleted {n} risky files"),
+                Some(_) => format!("JLab took action on {n} risky files"),
+                None => format!("JLab found {n} risky files"),
+            }
         };
         (title, body)
     };

@@ -210,6 +210,8 @@ export type WatcherEvent =
       sha256: string;
       flagged: boolean;
       action: "quarantined" | "trashed" | null;
+      reappeared?: boolean;
+      priorAction?: "quarantined" | "trashed" | null;
     }
   | { type: "error"; path: string; code: string; message: string }
   | { type: "focus-review" };
