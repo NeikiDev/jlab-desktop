@@ -2171,6 +2171,7 @@ dependencies = [
  "log",
  "notify",
  "notify-debouncer-full",
+ "notify-rust",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

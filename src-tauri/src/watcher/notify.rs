@@ -154,21 +154,83 @@ pub fn send_test_notification(app: &AppHandle) -> Result<(), AppError> {
             let _ = notif.request_permission();
         }
     }
-    notif
-        .builder()
-        .title("JLab notifications work")
-        .body("Test notification from the folder watcher.")
+
+    #[cfg(target_os = "linux")]
+    {
+        let handle = linux_build(
+            "JLab notifications work",
+            "Test notification from the folder watcher.",
+        )
         .show()
         .map_err(|e| {
             log::warn!("test notification failed: {e}");
             AppError::NotificationDenied
-        })
+        })?;
+        spawn_close_waiter(handle);
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        notif
+            .builder()
+            .title("JLab notifications work")
+            .body("Test notification from the folder watcher.")
+            .show()
+            .map_err(|e| {
+                log::warn!("test notification failed: {e}");
+                AppError::NotificationDenied
+            })
+    }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn show_native(app: &AppHandle, title: &str, body: &str) {
     let res = app.notification().builder().title(title).body(body).show();
     if let Err(e) = res {
         log::warn!("native notification failed: {e}");
+    }
+}
+
+/// GNOME 46+ (Ubuntu 24.04+, Fedora 41+) closes a notification the moment
+/// its `NotificationHandle` is dropped. `tauri-plugin-notification` drops
+/// the handle right after `show()`, which makes the toast flash for a few
+/// milliseconds and then vanish. The accepted workaround is to call
+/// `on_close()` on the handle, which blocks the calling thread until the
+/// user dismisses the toast or the daemon times it out. We do that on a
+/// detached thread so the caller is not held up.
+///
+/// `appname` is the productName so GNOME can match the toast against our
+/// installed `.desktop` entry. `icon` uses the binary name; the deb / rpm
+/// bundles install an icon under `jlab-desktop` in the hicolor theme. On
+/// AppImage runs the icon is simply absent, which is fine.
+///
+/// Reference: https://github.com/tauri-apps/plugins-workspace/issues/2566
+#[cfg(target_os = "linux")]
+fn show_native(_app: &AppHandle, title: &str, body: &str) {
+    match linux_build(title, body).show() {
+        Ok(handle) => spawn_close_waiter(handle),
+        Err(e) => log::warn!("native notification failed: {e}"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_build(title: &str, body: &str) -> notify_rust::Notification {
+    let mut builder = notify_rust::Notification::new();
+    builder
+        .appname("JLab Desktop")
+        .summary(title)
+        .body(body)
+        .icon("jlab-desktop");
+    builder
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_close_waiter(handle: notify_rust::NotificationHandle) {
+    let spawn = std::thread::Builder::new()
+        .name("jlab-notify".into())
+        .spawn(move || handle.on_close(|_| {}));
+    if let Err(e) = spawn {
+        log::warn!("notification on_close thread spawn failed: {e}");
     }
 }
 
