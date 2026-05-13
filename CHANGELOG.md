@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-13
+
+### Added
+
+- Watcher: known-bad SHA-256 short-circuit. When a `.jar` lands in a watched folder and its SHA-256 matches a prior history entry whose stored severity trips the current auto-action threshold, the action (quarantine or trash) is applied immediately, no upload. This saves an API request for repeat threats and keeps protection working while `jlab.threat.rip` is offline. The check re-evaluates against the user's current settings, not the prior `actionTaken`, so tightening or loosening the threshold stays authoritative. Containers (`.zip` / `.mcpack` / `.mrpack`) still upload because the inner-jar SHA is only known after the extraction the upload pipeline performs. Manual scans never short-circuit.
+- Watcher: visible "API offline" state. When `check_status` reports offline and the watcher is on, the panel shows a red banner explaining that new files cannot be scanned until the service returns, the dashboard card shows an "API offline" pill, and the hero status chip switches to a critical tone. The known-bad SHA-256 path keeps running, and (when hold-until-scanned is on) new jars are still renamed to `.jlab-pending` so they cannot run. The remote-status state was hoisted into `App.tsx` (`useRemoteStatus` hook) so the top-bar pill, watcher panel, and idle dashboard share one source of truth and one 60-second poll.
+- History schema gained `confirmedFamilies` and `actionTaken` fields. The watcher's known-bad short-circuit reads the prior family count to evaluate the `confirmed_families_only` threshold; `actionTaken` records `"quarantined"`, `"trashed"`, or `null` per row. Older `history.json` entries decode with `confirmedFamilies = 0` and `actionTaken = null`. Schema version is unchanged at 1; both fields are additive via `#[serde(default)]`. Side effect: if your auto-action is set to `confirmed_families_only`, the known-bad SHA-256 short-circuit will not fire on pre-0.5.3 history entries (their stored family count is 0), so the file will be uploaded once on 0.5.3+ to refresh the count. Subsequent hits short-circuit normally.
+
+### Changed
+
+- History append moved out of the shared `run_scan` helper. `scan_jar` now appends inline (manual scans never auto-action, so `actionTaken` is always `null`). The watcher writes its entry after the auto-action decision so the row records what actually happened to the file. No user-visible behavior change beyond the new `actionTaken` field.
+
+### Fixed
+
+- Multi-jar drops in a watched folder are now renamed to `.jlab-pending` in one blocking task per batch, not one per event. The qualifier drains up to 256 raw events with `recv_many` and renames all of them back-to-back without an async yield in between. Closes a residual race where, after 0.5.1's qualifier-side rename, jar 1 of a 5-jar drop could finish renaming while jars 2-5 were still loadable by a Java launcher. The single-event path is unchanged.
+- "Scan all now" and the 6-hour rescan scheduler now apply the same pre-hold rename that real-time arrivals get. Previously `force_enqueue` skipped the rename and left every queued jar loadable until the consumer task picked it up. The new path renames to `.jlab-pending` before enqueueing (when hold-until-scanned is on) and falls back to the original path with a warning if the rename fails.
+- Windows: the watched folders list no longer shows the Win32 verbatim prefix in the path. `std::fs::canonicalize` returns `\\?\C:\Users\Patrick\Downloads` for `C:\Users\Patrick\Downloads`, and the watcher stores that form so notify bindings and equality checks against the settings file stay consistent. The frontend now strips `\\?\` (and rewrites `\\?\UNC\server\share` to `\\server\share`) for display only; the stored value is unchanged, so existing settings keep working without a migration.
+
 ## [0.5.2] - 2026-05-12
 
 ### Fixed

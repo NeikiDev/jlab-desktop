@@ -1,86 +1,28 @@
-import { useEffect, useRef, useState } from "react";
-import { checkStatus, type StatusInfo } from "../api";
+import type { StatusInfo } from "../api";
 import { cn } from "../cn";
 
-type Phase = "checking" | "online" | "offline";
+export type RemoteStatusPhase = "checking" | "online" | "offline";
 
-const REFRESH_MS = 60_000;
-
-const DOT_COLOR: Record<Phase, string> = {
+const DOT_COLOR: Record<RemoteStatusPhase, string> = {
   checking: "bg-text-dim",
   online:   "bg-status-ok",
   offline:  "bg-sev-critical",
 };
 
-const LABEL: Record<Phase, string> = {
+const LABEL: Record<RemoteStatusPhase, string> = {
   checking: "Checking",
   online: "Online",
   offline: "Offline",
 };
 
-export default function RemoteStatus() {
-  const [phase, setPhase] = useState<Phase>("checking");
-  const [info, setInfo] = useState<StatusInfo | null>(null);
-  const [lastChecked, setLastChecked] = useState<Date | null>(null);
-  const inFlight = useRef(false);
-  const hasResult = useRef(false);
+interface Props {
+  phase: RemoteStatusPhase;
+  info: StatusInfo | null;
+  lastChecked: Date | null;
+  onRecheck: () => void;
+}
 
-  async function run() {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    if (!hasResult.current) setPhase("checking");
-    try {
-      const result = await checkStatus();
-      setInfo(result);
-      setPhase(result.ok ? "online" : "offline");
-      setLastChecked(new Date());
-    } catch {
-      setInfo({ ok: false, status: null, latencyMs: 0, version: null, error: "ipc error" });
-      setPhase("offline");
-      setLastChecked(new Date());
-    } finally {
-      hasResult.current = true;
-      inFlight.current = false;
-    }
-  }
-
-  useEffect(() => {
-    let intervalId: number | null = null;
-
-    const startInterval = () => {
-      if (intervalId !== null) return;
-      intervalId = window.setInterval(() => {
-        void run();
-      }, REFRESH_MS);
-    };
-
-    const stopInterval = () => {
-      if (intervalId === null) return;
-      window.clearInterval(intervalId);
-      intervalId = null;
-    };
-
-    if (document.visibilityState !== "hidden") {
-      void run();
-      startInterval();
-    }
-
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        stopInterval();
-      } else {
-        void run();
-        startInterval();
-      }
-    };
-
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      stopInterval();
-    };
-  }, []);
-
+export default function RemoteStatus({ phase, info, lastChecked, onRecheck }: Props) {
   let tooltip = "Checking jlab.threat.rip…";
   if (info) {
     const parts: string[] = [];
@@ -96,7 +38,7 @@ export default function RemoteStatus() {
   return (
     <button
       type="button"
-      onClick={run}
+      onClick={onRecheck}
       title={tooltip}
       aria-label={`Remote status: ${LABEL[phase]}. Click to recheck.`}
       className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border-faint bg-bg-elev/60 px-2.5 py-1 transition-[border-color,background] duration-fast ease-out hover:border-border hover:bg-bg-elev"

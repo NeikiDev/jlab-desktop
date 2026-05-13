@@ -45,6 +45,16 @@ pub struct HistoryEntry {
     /// folder watcher. Older entries without this field load as "manual".
     #[serde(default = "default_source")]
     pub source: String,
+    /// Confirmed family count at scan time. Persisted so a future SHA-256
+    /// rehit can re-evaluate the `confirmed_families_only` auto-action
+    /// threshold without re-uploading. Older entries decode as 0.
+    #[serde(default)]
+    pub confirmed_families: u32,
+    /// Action the watcher applied to the file at scan time. `"quarantined"`,
+    /// `"trashed"`, or `None` (no action / manual scan). Older entries
+    /// decode as `None`.
+    #[serde(default)]
+    pub action_taken: Option<String>,
 }
 
 fn default_source() -> String {
@@ -264,6 +274,7 @@ pub fn build_entry(
     file_size_bytes: u64,
     sha256: &str,
     source: &str,
+    action_taken: Option<String>,
 ) -> HistoryEntry {
     let mut counts = SeverityCounts::default();
     let mut signature_count: u32 = 0;
@@ -284,6 +295,12 @@ pub fn build_entry(
         }
     }
 
+    let confirmed_families = scan
+        .get("confirmedFamilies")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len() as u32)
+        .unwrap_or(0);
+
     let top_severity = if counts.critical > 0 {
         "critical"
     } else if counts.high > 0 {
@@ -296,16 +313,7 @@ pub fn build_entry(
         "info"
     };
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let scanned_at_ms = now.as_millis() as u64;
-    let scanned_at = iso8601_utc(now.as_secs() as i64, now.subsec_millis());
-    let seq = ENTRY_SEQ.fetch_add(1, Ordering::Relaxed);
-    let id = format!(
-        "{scanned_at_ms}-{seq:x}-{}",
-        sha256.get(..8).unwrap_or(sha256)
-    );
+    let (id, scanned_at) = new_entry_id_and_time(sha256);
 
     HistoryEntry {
         id,
@@ -317,6 +325,55 @@ pub fn build_entry(
         top_severity: top_severity.to_string(),
         signature_count,
         source: source.to_string(),
+        confirmed_families,
+        action_taken,
+    }
+}
+
+fn new_entry_id_and_time(sha256: &str) -> (String, String) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let scanned_at_ms = now.as_millis() as u64;
+    let scanned_at = iso8601_utc(now.as_secs() as i64, now.subsec_millis());
+    let seq = ENTRY_SEQ.fetch_add(1, Ordering::Relaxed);
+    let id = format!(
+        "{scanned_at_ms}-{seq:x}-{}",
+        sha256.get(..8).unwrap_or(sha256)
+    );
+    (id, scanned_at)
+}
+
+/// Build a new `HistoryEntry` that inherits severity, family, and signature
+/// data from a prior entry but gets a fresh id, timestamp, file name, and
+/// action label. Used by the watcher's known-bad short-circuit when the
+/// same SHA-256 reappears on disk: we record a new audit row without
+/// re-uploading.
+///
+/// Legacy note: `confirmed_families` is carried over verbatim, so entries
+/// written before 0.5.3 (which decode with `confirmed_families = 0`) stay
+/// at 0 across replays. The `ConfirmedFamiliesOnly` auto-action threshold
+/// only kicks in for these once the file has been re-uploaded at least
+/// once on 0.5.3+; until then the user pays one upload for the refresh.
+pub fn replay_entry(
+    prior: &HistoryEntry,
+    file_name: &str,
+    source: &str,
+    action_taken: Option<String>,
+) -> HistoryEntry {
+    let (id, scanned_at) = new_entry_id_and_time(&prior.sha256);
+    HistoryEntry {
+        id,
+        scanned_at,
+        file_name: file_name.to_string(),
+        file_size_bytes: prior.file_size_bytes,
+        sha256: prior.sha256.clone(),
+        severity_counts: prior.severity_counts.clone(),
+        top_severity: prior.top_severity.clone(),
+        signature_count: prior.signature_count,
+        source: source.to_string(),
+        confirmed_families: prior.confirmed_families,
+        action_taken,
     }
 }
 
@@ -398,9 +455,13 @@ mod tests {
                 { "severity": "high" },
                 { "severity": "low" },
                 { "severity": "weird" },
+            ],
+            "confirmedFamilies": [
+                { "name": "alpha" },
+                { "name": "beta" },
             ]
         });
-        let e = build_entry(&scan, "x.jar", 1234, "abcdef0123456789", "manual");
+        let e = build_entry(&scan, "x.jar", 1234, "abcdef0123456789", "manual", None);
         assert_eq!(e.signature_count, 5);
         assert_eq!(e.severity_counts.critical, 2);
         assert_eq!(e.severity_counts.high, 1);
@@ -408,6 +469,8 @@ mod tests {
         assert_eq!(e.severity_counts.low, 1);
         assert_eq!(e.severity_counts.info, 1);
         assert_eq!(e.top_severity, "critical");
+        assert_eq!(e.confirmed_families, 2);
+        assert!(e.action_taken.is_none());
         assert_eq!(e.sha256, "abcdef0123456789");
         assert!(e.id.ends_with("-abcdef01"));
     }
@@ -418,17 +481,32 @@ mod tests {
     #[test]
     fn build_entry_id_unique_for_same_ms_same_file() {
         let scan = serde_json::json!({ "signatures": [] });
-        let a = build_entry(&scan, "x.jar", 0, "abcdef0123456789", "manual");
-        let b = build_entry(&scan, "x.jar", 0, "abcdef0123456789", "manual");
+        let a = build_entry(&scan, "x.jar", 0, "abcdef0123456789", "manual", None);
+        let b = build_entry(&scan, "x.jar", 0, "abcdef0123456789", "manual", None);
         assert_ne!(a.id, b.id, "ids must differ even on same-ms same-file");
     }
 
     #[test]
     fn build_entry_no_signatures() {
         let scan = serde_json::json!({ "signatures": [] });
-        let e = build_entry(&scan, "x.jar", 0, "00", "manual");
+        let e = build_entry(&scan, "x.jar", 0, "00", "manual", None);
         assert_eq!(e.signature_count, 0);
         assert_eq!(e.top_severity, "info");
+        assert_eq!(e.confirmed_families, 0);
+    }
+
+    #[test]
+    fn build_entry_records_action_taken() {
+        let scan = serde_json::json!({ "signatures": [{ "severity": "critical" }] });
+        let e = build_entry(
+            &scan,
+            "evil.jar",
+            42,
+            "deadbeef",
+            "watcher",
+            Some("quarantined".into()),
+        );
+        assert_eq!(e.action_taken.as_deref(), Some("quarantined"));
     }
 
     #[test]

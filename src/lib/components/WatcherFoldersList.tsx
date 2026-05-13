@@ -16,6 +16,16 @@ interface Props {
   onError: (msg: string) => void;
 }
 
+// On Windows `std::fs::canonicalize` returns the Win32 device-namespace
+// form (`\\?\C:\Users\…` or `\\?\UNC\server\share`). The stored value
+// keeps that prefix so notify bindings and path equality checks stay
+// consistent; we only strip it here for display.
+function displayPath(p: string): string {
+  if (p.startsWith("\\\\?\\UNC\\")) return "\\\\" + p.slice(8);
+  if (p.startsWith("\\\\?\\")) return p.slice(4);
+  return p;
+}
+
 export default function WatcherFoldersList({ folders, onChanged, onError }: Props) {
   const [adding, setAdding] = useState(false);
   const [pasted, setPasted] = useState("");
@@ -215,9 +225,9 @@ export default function WatcherFoldersList({ folders, onChanged, onError }: Prop
               <FolderIcon className="text-text-muted" />
               <span
                 className="min-w-0 flex-1 truncate font-mono text-[13.5px] text-text"
-                title={f.path}
+                title={displayPath(f.path)}
               >
-                {f.path}
+                {displayPath(f.path)}
               </span>
               <div className="flex shrink-0 items-center gap-1.5">
                 <IconButton onClick={() => void scanAll(f.path)} title="Scan all files now">
